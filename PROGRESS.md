@@ -3,7 +3,7 @@
 Handoff document. Read this first — it carries everything a fresh session needs
 so the research below never has to be repeated.
 
-**Last updated:** 2026-08-18 · Phases 0–1 complete.
+**Last updated:** 2026-08-18 · Phases 0–2 complete.
 
 ---
 
@@ -193,14 +193,65 @@ Dexie transaction: `updatedAt` stamping, outbox enqueueing, soft deletes.
 permanent deletion is local-only and a peer may push the row back. Only purge
 rows whose soft delete has already been pushed.
 
-### ⬜ Phase 2 — Shell, navigation, route splitting
-- `AppShell` + `MobileNav` (below `md`) / `SideNav` (above). Read
-  `npx astryx docs layout` **first** — frame before pages.
-- `react-router` (8.3.0, already installed). Route-level `lazy()` splitting —
-  this also clears the current >500kb chunk warning.
-- Replace the throwaway [App.tsx](src/app/App.tsx) gate screen.
-- Call `initializeDatabase()` from [seed.ts](src/db/seed.ts) at startup.
-- Resolve the Motion/`<div>` tension — see §7.
+### ✅ Phase 2 — Shell, navigation, route splitting
+**88 tests passing, `tsc` clean, `astryx doctor` 6/6, verified in a real browser.**
+
+- [AppFrame.tsx](src/app/AppFrame.tsx) — `AppShell` at the root route, so the
+  nav, the Dexie connection and the theme survive every navigation.
+- [nav.ts](src/app/nav.ts) — the twelve destinations, defined once. Drives the
+  side nav, the mobile drawer and `document.title` from one list.
+- [routes.tsx](src/app/routes.tsx) — every screen behind `lazy`, plus the root
+  loader, `HydrateFallback` and `ErrorBoundary`.
+- [Page.tsx](src/components/Page.tsx), [PhasePlaceholder.tsx](src/components/PhasePlaceholder.tsx),
+  [animated.ts](src/components/animated.ts) — the wrappers §7 asks for.
+- 12 route stubs in [src/pages/](src/pages/). Every one is meant to be deleted,
+  not extended. Settings already carries the real colour-mode control.
+
+**Four things worth not rediscovering:**
+
+1. **AppShell generates the whole mobile story from the `sideNav` slot.** Below
+   `md` it moves that exact node into a modal drawer and renders a compact top
+   bar with the hamburger — no second nav to keep in sync, and no `TopNav`
+   needed. But the drawer is **not** told that a link inside it navigated, so
+   uncontrolled it sits open on top of the page the user just picked. It is
+   controlled from `AppFrame` and closed on `pathname` change.
+2. **`LinkProvider` at the frame root, once.** Astryx link-rendering components
+   resolve through `useLinkComponent()`, which falls back to a plain `<a>` —
+   a full document load that throws away the Dexie connection. One provider
+   replaces it everywhere; [router-link.tsx](src/app/router-link.tsx) exists
+   only because Astryx passes `href` and React Router wants `to`.
+3. **Never import from the `@astryxdesign/core` barrel** (`Theme`,
+   `LinkProvider`): use `/theme` and `/Link`. Measured as neutral today because
+   tree-shaking currently copes, but it re-exports all 156 components and is one
+   bundler change away from putting the library in the initial chunk.
+4. **`initializeDatabase()` runs in the root route's `loader`**, not in
+   `main.tsx`. IndexedDB genuinely fails in some real situations (Firefox
+   private windows, blocked site data, a corrupt WebView profile); in the loader
+   that surfaces in [RouteError.tsx](src/app/RouteError.tsx) as a message, and
+   in `main.tsx` it would be an unhandled rejection behind an empty shell.
+
+**Motion/`<div>` tension resolved, and it paid for itself.** `create(Stack)`
+animates the Astryx component directly instead of wrapping it in a `motion.div`.
+Import `create` from **`motion/react-m`**, never `motion` from `motion/react`:
+the full proxy is eagerly wired to layout projection and drag gestures, ~110kb
+this app has no use for, which lands in the initial chunk because the frame
+animates route changes. `<LazyMotion features={domAnimation} strict>` in
+[providers.tsx](src/app/providers.tsx) supplies the features actually used and
+makes a stray `motion.div` throw rather than silently re-inflate the bundle.
+Worth **46kb raw / 13kb gzip**. Phase 8's shared-element transitions need
+projection — widen the feature set there, do not go back to the full proxy.
+
+**`base: '/'` in [vite.config.ts](vite.config.ts) — do not put it back to `'./'`.**
+A relative base resolves assets against the *current path*: at `/ledger/abc` the
+browser requests `/ledger/assets/index.js`, gets a 404, and renders nothing.
+One-segment routes work by luck, so this would have surfaced as a mystery at the
+first detail route in Phase 3. The old justification ("Capacitor and Tauri load
+from the filesystem") no longer holds — both serve over a custom-protocol origin
+(Capacitor `http://localhost`, Tauri `tauri://localhost`), not `file://`.
+**Phase 7 must confirm this on a real device.** If a packaged build 404s on its
+assets the fix is `createHashRouter` in [App.tsx](src/app/App.tsx), not a
+relative base, which cannot work with nested paths. Web hosts need an SPA
+fallback.
 
 ### ⬜ Phase 3 — Feature parity + friction fixes
 Seven areas, each **with full edit support from the start**: Dashboard,
@@ -252,10 +303,32 @@ custom composition.
 
 ## 7. Open items
 
-- **Motion vs. Astryx's "no raw `<div>`" rule.** The Phase 0 gate screen wraps a
-  `Card` in `motion.div` and uses a `<strong>`. Correct fix: `motion.create(Card)`
-  to animate Astryx components directly. Resolve in Phase 2 and apply throughout.
-- **Bundle >500kb warning.** Expected to clear with route-level splitting in Phase 2.
+- ~~**Motion vs. Astryx's "no raw `<div>`" rule.**~~ Resolved in Phase 2 —
+  `create(Stack)` / `create(Card)` from [animated.ts](src/components/animated.ts).
+- **Bundle.** The >500kb warning is gone, but **not for the reason Phase 2
+  predicted.** Route splitting alone did not do it — `react-dom` is ~523kb of
+  source on its own, so the entry was never going to fit under 500kb by moving
+  pages out. What cleared it was splitting `react` / `react-router` / `dexie` /
+  `lucide-react` into vendor chunks (`build.rolldownOptions.output.advancedChunks`),
+  which is worth doing on its own merits — those change only on upgrades, so a
+  returning user re-fetches app code and not the framework.
+
+  Honest numbers: **eager JS is 731kb raw / 227kb gzip across 13 chunks**, up
+  from Phase 1's 524kb / 159kb single chunk. The growth is real work, not bloat:
+  react-router (89kb) and dexie (95kb) are both newly on the boot path, plus
+  AppShell/SideNav/MobileNav. Route splitting is doing its job — each page chunk
+  is under 1kb.
+
+  **The one genuinely suspicious item is `useTranslator`, 101kb / 26kb gzip**:
+  Astryx's i18n, being the full ICU message-format parser plus a 71kb `en.json`,
+  eagerly loaded, for a single-user single-locale app. Worth asking whether
+  Astryx can precompile messages or ship a lite locale before Phase 8.
+- **`Transactions` vs `Ledger` was a Phase 2 judgement call.** The Phase 3 list
+  names both without distinguishing them. They are currently scaffolded as:
+  Transactions = the filterable list of every entry across accounts; Ledger =
+  one account's register with a running balance, which is also how a suspect
+  derived balance gets checked. If that is not the intent, Phase 3 should
+  collapse them — it is two route stubs, not two implementations.
 - **Astryx pre-1.0 churn.** Keep Astryx behind wrappers in `src/components/` so
   breaking changes hit a few files, not every screen. Run
   `npx astryx upgrade --apply` after any core bump.
@@ -274,6 +347,8 @@ npm run dev          # Vite dev server on :5173
 npm run build        # tsc -b && vite build
 npm test             # vitest run  (88 passing)
 npm run test:watch
+npm run preview      # serve dist/ on :4173 — use this, not `dev`, to check
+                     # that deep links resolve their assets
 
 npx astryx doctor            # validate Astryx wiring
 npx astryx component <Name>  # exact props — use instead of guessing

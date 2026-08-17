@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+*.local
+*.tsbuildinfo
+
+# Native wrappers (generated)
+android/
+ios/
+src-tauri/target/
+src-tauri/gen/
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Test output
+coverage/
+
+# ---------------------------------------------------------------
+# Personal financial data. This repository is PUBLIC.
+# Exports from the old app live here for the migration importer to
+# be developed against, but must never be committed.
+# ---------------------------------------------------------------
+migration-data/
+*.xls
+*.xlsx
+*.pdf

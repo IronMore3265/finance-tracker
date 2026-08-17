@@ -1,0 +1,62 @@
+/*
+ * Import order is load-bearing. It maps onto the layer cascade below:
+ *   reset.css   -> @layer reset
+ *   astryx.css  -> @layer astryx-base   (component styles)
+ *   theme.css   -> @layer astryx-theme  (token overrides)
+ * Reordering these silently breaks theming rather than erroring.
+ */
+@layer reset, theme, base, astryx-base, astryx-theme, components, utilities;
+
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/preflight.css' layer(base);
+@import '@astryxdesign/core/reset.css';
+@import '@astryxdesign/core/astryx.css';
+@import '@astryxdesign/theme-neutral/theme.css';
+/* Bridges Astryx tokens onto Tailwind utilities: bg-surface, text-primary,
+   rounded-lg, shadow-md all resolve to Astryx design tokens. Prefer these
+   over hand-written bg-[var(--color-background-surface)]. */
+@import '@astryxdesign/core/tailwind-theme.css';
+@import 'tailwindcss/utilities.css' layer(utilities);
+
+/* The Astryx theme *names* Figtree but never loads it. Self-hosted rather
+   than pulled from Google Fonts, because this app must work offline inside
+   Capacitor and Tauri. */
+@import '@fontsource-variable/figtree';
+
+:root {
+  font-family: var(--font-family-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-background-body);
+  color: var(--color-text-primary);
+  /* Respect device notches and gesture bars on Android. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+/* Touch devices: suppress the tap highlight and text selection that make a
+   wrapped web app feel non-native. Inputs keep selection. */
+@media (hover: none) and (pointer: coarse) {
+  body {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  input,
+  textarea,
+  [contenteditable] {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}

@@ -58,8 +58,17 @@ Hard-won; do not re-derive.
   than erroring.
 - **`data-astryx-theme` on `<html>`** is required or theme CSS silently no-ops.
 - **The theme names Figtree but never loads it.** Self-hosted via
-  `@fontsource-variable/figtree` rather than Google Fonts, because the app must
-  work offline inside Capacitor/Tauri.
+  `@fontsource/figtree` rather than Google Fonts, because the app must work
+  offline inside Capacitor/Tauri.
+  **Use the STATIC package, never `@fontsource-variable/figtree`.** The variable
+  build declares its family as `'Figtree Variable'`, which never matches the
+  plain `Figtree` the theme requests — the webfont downloads successfully and is
+  then silently ignored in favour of the system fallback (Segoe UI on Windows).
+  This cost a debugging round; the build output looks correct either way, since
+  the woff2 files are bundled regardless. Verify by checking that the built CSS
+  contains `font-family:Figtree` and zero occurrences of `Figtree Variable`.
+  Required weights are 400/500/600/700 (`--font-weight-normal`/`medium`/
+  `semibold`/`bold`).
 - **`<Theme mode>` already handles light/dark/system.** Don't hand-roll dark
   mode; [theme-mode.tsx](src/app/theme-mode.tsx) only persists the preference.
 - **Motion tokens** (read at runtime in [motion.ts](src/app/motion.ts), never hardcoded):

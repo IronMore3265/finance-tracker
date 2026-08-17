@@ -18,10 +18,21 @@
 @import '@astryxdesign/core/tailwind-theme.css';
 @import 'tailwindcss/utilities.css' layer(utilities);
 
-/* The Astryx theme *names* Figtree but never loads it. Self-hosted rather
-   than pulled from Google Fonts, because this app must work offline inside
-   Capacitor and Tauri. */
-@import '@fontsource-variable/figtree';
+/* The Astryx theme *names* Figtree but never loads it. Self-hosted rather than
+   pulled from Google Fonts, because this app must work offline inside
+   Capacitor and Tauri.
+
+   Use the STATIC package, not @fontsource-variable/figtree: the variable build
+   declares its family as 'Figtree Variable', which never matches the plain
+   'Figtree' the theme asks for, so the webfont loads and is then silently
+   ignored in favour of the system fallback.
+
+   These four weights are the ones the theme resolves to:
+   --font-weight-normal 400, medium 500, semibold 600, bold 700. */
+@import '@fontsource/figtree/400.css';
+@import '@fontsource/figtree/500.css';
+@import '@fontsource/figtree/600.css';
+@import '@fontsource/figtree/700.css';
 
 :root {
   font-family: var(--font-family-body);

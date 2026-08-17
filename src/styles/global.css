@@ -22,17 +22,43 @@
    pulled from Google Fonts, because this app must work offline inside
    Capacitor and Tauri.
 
-   Use the STATIC package, not @fontsource-variable/figtree: the variable build
-   declares its family as 'Figtree Variable', which never matches the plain
-   'Figtree' the theme asks for, so the webfont loads and is then silently
-   ignored in favour of the system fallback.
+   These @font-face rules are written by hand rather than imported from
+   @fontsource-variable/figtree, for one specific reason: that package declares
+   its family as 'Figtree Variable', which never matches the plain 'Figtree'
+   the theme requests. Importing it downloads the font and then silently
+   ignores it in favour of the system fallback. Declaring the family ourselves
+   is what makes the variable font actually reachable.
 
-   These four weights are the ones the theme resolves to:
-   --font-weight-normal 400, medium 500, semibold 600, bold 700. */
-@import '@fontsource/figtree/400.css';
-@import '@fontsource/figtree/500.css';
-@import '@fontsource/figtree/600.css';
-@import '@fontsource/figtree/700.css';
+   Variable rather than the four static weights: one file spans 300-900
+   continuously (~30KB vs ~45KB), so any weight can be used at any breakpoint
+   without a new download. The theme currently resolves to 400/500/600/700,
+   all inside this range.
+
+   The latin / latin-ext split and unicode-range values mirror the package's
+   own wght.css, so a page of pure ASCII never fetches the extended set. */
+@font-face {
+  font-family: 'Figtree';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 300 900;
+  src: url('@fontsource-variable/figtree/files/figtree-latin-wght-normal.woff2')
+    format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Figtree';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 300 900;
+  src: url('@fontsource-variable/figtree/files/figtree-latin-ext-wght-normal.woff2')
+    format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
 
 :root {
   font-family: var(--font-family-body);

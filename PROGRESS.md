@@ -57,18 +57,29 @@ Hard-won; do not re-derive.
   It maps onto the layer cascade; reordering breaks theming *silently* rather
   than erroring.
 - **`data-astryx-theme` on `<html>`** is required or theme CSS silently no-ops.
-- **The theme names Figtree but never loads it.** Self-hosted via
-  `@fontsource/figtree` rather than Google Fonts, because the app must work
-  offline inside Capacitor/Tauri.
-  **Use the STATIC package, never `@fontsource-variable/figtree`.** The variable
-  build declares its family as `'Figtree Variable'`, which never matches the
-  plain `Figtree` the theme requests — the webfont downloads successfully and is
-  then silently ignored in favour of the system fallback (Segoe UI on Windows).
-  This cost a debugging round; the build output looks correct either way, since
-  the woff2 files are bundled regardless. Verify by checking that the built CSS
-  contains `font-family:Figtree` and zero occurrences of `Figtree Variable`.
-  Required weights are 400/500/600/700 (`--font-weight-normal`/`medium`/
-  `semibold`/`bold`).
+- **The theme names Figtree but never loads it.** Self-hosted rather than pulled
+  from Google Fonts, because the app must work offline inside Capacitor/Tauri.
+
+  **The `@font-face` rules in [global.css](src/styles/global.css) are written by
+  hand on purpose — do not replace them with an `@import` of the fontsource
+  package.** `@fontsource-variable/figtree` declares its family as
+  `'Figtree Variable'`, which never matches the plain `Figtree` the theme asks
+  for: the webfont downloads successfully and is then silently ignored in favour
+  of the system fallback (Segoe UI on Windows). This cost a debugging round,
+  because *every surface check still passes* — the woff2 files are bundled,
+  `@font-face` blocks exist, and the string "Figtree" appears in the CSS either
+  way. Declaring the family ourselves is what makes the font reachable.
+
+  Variable (300–900 in one file, ~30KB) is used in preference to four static
+  weights (~45KB) so any weight is available at any breakpoint without another
+  download. The theme currently resolves to 400/500/600/700 only
+  (`--font-weight-normal`/`medium`/`semibold`/`bold`), so the extra range is
+  latent capability, not something the UI exercises yet — realising it needs
+  typography token overrides via `defineTheme`.
+
+  **Verify after any font change:** the built CSS must contain
+  `font-family:Figtree` (2 blocks, `font-weight:300 900`) and **zero**
+  occurrences of `Figtree Variable`.
 - **`<Theme mode>` already handles light/dark/system.** Don't hand-roll dark
   mode; [theme-mode.tsx](src/app/theme-mode.tsx) only persists the preference.
 - **Motion tokens** (read at runtime in [motion.ts](src/app/motion.ts), never hardcoded):

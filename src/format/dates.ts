@@ -16,14 +16,27 @@
  * `Date(y, m, d)` constructor, which is local by definition.
  */
 
+/**
+ * `YYYY-MM-DD`, structurally identical to Astryx's own `ISODateString`.
+ *
+ * Declared here rather than imported from `@astryxdesign/core/DateInput` so
+ * that date handling does not depend on a pre-1.0 component's type exports —
+ * the two are structurally compatible, so they interoperate without either
+ * side importing the other.
+ */
+export type ISODate = `${number}${number}${number}${number}-${number}${number}-${number}${number}`;
+
 /** Epoch ms -> `YYYY-MM-DD` in the local zone. */
-export function toISODate(epochMs: number): string {
+export function toISODate(epochMs: number): ISODate {
   const date = new Date(epochMs);
+  // The cast is safe by construction: four digits, two, two, zero-padded.
+  // TypeScript cannot verify that through `join`, and a runtime check here
+  // would be checking this function against itself.
   return [
     date.getFullYear(),
     String(date.getMonth() + 1).padStart(2, '0'),
     String(date.getDate()).padStart(2, '0'),
-  ].join('-');
+  ].join('-') as ISODate;
 }
 
 /**

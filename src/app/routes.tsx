@@ -59,6 +59,15 @@ export const routes: RouteObject[] = [
         },
       },
       {
+        // The same screen, with an account chosen. Deep-linkable, so "open
+        // ledger" from an account row is a real URL rather than local state,
+        // and the browser's back button works.
+        path: 'ledger/:accountId',
+        lazy: {
+          Component: async () => (await import('../pages/LedgerPage')).LedgerPage,
+        },
+      },
+      {
         path: 'accounts',
         lazy: {
           Component: async () => (await import('../pages/AccountsPage')).AccountsPage,

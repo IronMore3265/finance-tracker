@@ -20,6 +20,19 @@
  */
 import type {IntervalType, PlannedException, PlannedTransaction} from '../db/types';
 
+/**
+ * Just the fields that define a schedule.
+ *
+ * The date arithmetic reads nothing else, so taking this rather than a whole
+ * `PlannedTransaction` lets a caller ask "when would this fire?" about a rule
+ * being composed in a form, before it has an id or sync metadata. Any real
+ * `PlannedTransaction` satisfies it structurally.
+ */
+export type RecurrenceRule = Pick<
+  PlannedTransaction,
+  'startDate' | 'intervalType' | 'intervalN' | 'oneTime' | 'endDate'
+>;
+
 /** Days in a given month; `month` is 0-indexed, matching Date. */
 function daysInMonth(year: number, month: number): number {
   // Day 0 of the next month is the last day of this one.
@@ -63,14 +76,14 @@ export function shift(start: Date, type: IntervalType, delta: number): Date {
 }
 
 /** Date of the `index`-th occurrence (0-based), ignoring exceptions. */
-export function occurrenceAt(rule: PlannedTransaction, index: number): number {
+export function occurrenceAt(rule: RecurrenceRule, index: number): number {
   if (index < 0) throw new RangeError('Occurrence index must be >= 0');
   const step = Math.max(1, Math.trunc(rule.intervalN));
   return shift(new Date(rule.startDate), rule.intervalType, index * step).getTime();
 }
 
 /** Approximate index for `timestamp`, used as a search seed rather than an answer. */
-function estimateIndex(rule: PlannedTransaction, timestamp: number): number {
+function estimateIndex(rule: RecurrenceRule, timestamp: number): number {
   const start = new Date(rule.startDate);
   const target = new Date(timestamp);
   const step = Math.max(1, Math.trunc(rule.intervalN));
@@ -94,7 +107,7 @@ function estimateIndex(rule: PlannedTransaction, timestamp: number): number {
 }
 
 /** True once the series has run past `endDate`. */
-function isPastEnd(rule: PlannedTransaction, timestamp: number): boolean {
+function isPastEnd(rule: RecurrenceRule, timestamp: number): boolean {
   return rule.endDate !== null && timestamp > rule.endDate;
 }
 
@@ -106,7 +119,7 @@ function isPastEnd(rule: PlannedTransaction, timestamp: number): boolean {
  * handful of steps rather than thousands.
  */
 export function indexOnOrAfter(
-  rule: PlannedTransaction,
+  rule: RecurrenceRule,
   timestamp: number,
 ): number | null {
   if (rule.oneTime) {

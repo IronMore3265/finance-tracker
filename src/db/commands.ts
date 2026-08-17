@@ -17,7 +17,12 @@
  * pure functions over arrays and must stay that way — it is what makes the
  * recurrence and budget maths testable without a database.
  */
-import {indexOnOrAfter, occurrenceAt, splitSeriesAt} from '../domain/recurrence';
+import {
+  indexOnOrAfter,
+  occurrenceAt,
+  splitSeriesAt,
+  type RecurrenceRule,
+} from '../domain/recurrence';
 import type {FinanceDatabase} from './db';
 import {db as defaultDb} from './db';
 import {newId, now} from './ids';
@@ -424,7 +429,7 @@ export async function splitSeries(
  * exceptions. Anything that changes the schedule calls this rather than
  * incrementing the old value, which is precisely the mistake the old app made.
  */
-export function nextDueDateFor(rule: PlannedTransaction, asOf: number): number {
+export function nextDueDateFor(rule: RecurrenceRule, asOf: number): number {
   if (rule.oneTime) return occurrenceAt(rule, 0);
 
   // `indexOnOrAfter` seeds from a date-based estimate rather than counting up

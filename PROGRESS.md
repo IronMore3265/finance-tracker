@@ -3,7 +3,7 @@
 Handoff document. Read this first — it carries everything a fresh session needs
 so the research below never has to be repeated.
 
-**Last updated:** 2026-08-18 · Phases 0–2 complete.
+**Last updated:** 2026-08-18 · Phases 0–3 complete.
 
 ---
 
@@ -253,28 +253,108 @@ assets the fix is `createHashRouter` in [App.tsx](src/app/App.tsx), not a
 relative base, which cannot work with nested paths. Web hosts need an SPA
 fallback.
 
-### ⬜ Phase 3 — Feature parity + friction fixes
-Seven areas, each **with full edit support from the start**: Dashboard,
-Accounts, Transactions, Planned, Debts, Ledger, Privacy & export. Plus category
-management (add/rename/recolor/reorder/**merge**).
+### ✅ Phase 3 — Feature parity + friction fixes
+**126 tests passing, `tsc` clean, `astryx doctor` 6/6, build clean.**
+**Not yet click-tested in a real browser** — see §7.
 
-The friction fixes are requirements, not polish:
-1. **Full edit everywhere** — the headline fix.
-2. **Per-occurrence editing** of recurring items: "this occurrence only"
-   (writes a `plannedExceptions` OVERRIDE) vs "this and all future"
-   (`splitSeriesAt` — caps the old rule, starts a new one). Skip writes a SKIP
-   exception rather than advancing a pointer. **Domain logic already done and
-   tested; only UI remains.**
-3. **Fast entry** — inline quick-add on the dashboard, not a modal.
-4. **Undo on delete** — Toast with Undo + a Trash view. `repo.restore()` exists.
-5. **Category management** including merge (reassign, then soft-delete).
-6. **Bulk actions** — multi-select → delete / recategorize / retag.
+All seven areas built, plus category management and the Budgets screen (which
+the Phase 4 note below had left implicit). Every one has full create/edit/
+delete with undo.
 
-### ⬜ Phase 4 — Analytics and budgets
+| Screen | File | Notes |
+|---|---|---|
+| Dashboard | [DashboardPage.tsx](src/pages/DashboardPage.tsx) | Tiles, inline quick-add, due-next, budget bars |
+| Transactions | [TransactionsPage.tsx](src/pages/TransactionsPage.tsx) | Filters, multi-select, bulk actions |
+| Ledger | [LedgerPage.tsx](src/pages/LedgerPage.tsx) | One account, running balance, `/ledger/:accountId` |
+| Accounts | [AccountsPage.tsx](src/pages/AccountsPage.tsx) | Derived balances, reorder |
+| Planned | [PlannedPage.tsx](src/pages/PlannedPage.tsx) | Post / skip / edit-one / edit-from-here |
+| Debts | [DebtsPage.tsx](src/pages/DebtsPage.tsx) | Part payments, optional ledger posting |
+| Budgets | [BudgetsPage.tsx](src/pages/BudgetsPage.tsx) | Per-category, payroll-anchored periods |
+| Categories | [CategoriesPage.tsx](src/pages/CategoriesPage.tsx) | Rename, recolour, reorder, **merge** |
+| Trash | [TrashPage.tsx](src/pages/TrashPage.tsx) | Restore, purge, empty |
+| Settings | [SettingsPage.tsx](src/pages/SettingsPage.tsx) | Theme, privacy, export/restore |
+
+**All six friction fixes shipped.** 1 full edit · 2 per-occurrence editing ·
+3 inline quick-add · 4 undo toast + Trash · 5 category merge · 6 bulk actions.
+
+**New shared layers, in dependency order:**
+
+- [db/commands.ts](src/db/commands.ts) — the writes that span tables and are
+  only correct if they land together (merge, skip/override, series split, debt
+  settlement). Each opens one Dexie transaction covering every table it touches
+  and calls the repositories *inside* it, so their stamping and outbox
+  behaviour is inherited rather than reimplemented. Dexie joins a nested
+  transaction to its parent when the parent's scope is a superset — that is
+  what makes this work. 25 tests.
+- [db/queries.ts](src/db/queries.ts) — live reads. Returns `undefined` while
+  loading and `[]` when genuinely empty; collapsing the two flashes "no
+  transactions yet" on every mount.
+- [db/backup.ts](src/db/backup.ts) — JSON export/restore, 13 tests. Carries
+  real ids, unlike the old app's `.xls`, which is what makes a restore
+  lossless. Soft-deleted rows are included on purpose. Rows are written with
+  `bulkPut`, **not** through the repositories, so a restore preserves the
+  original `updatedAt` — re-stamping would make a restored copy beat a newer
+  remote row under last-write-wins.
+- [platform/fs.ts](src/platform/fs.ts) — written ahead of the export button,
+  as §6 warned. Native savers **register** themselves at startup rather than
+  being imported, so this file builds with neither Capacitor nor Tauri
+  installed. Phase 7 calls `registerFileSaver`.
+- [components/](src/components/) — `AmountInput` (a *text* input: NumberInput
+  commits only valid numbers, so `4500 /` would be rejected keystroke by
+  keystroke and the expression feature could not exist), `MoneyText`,
+  `FormDialog`, `TransactionDialog`, `TagInput`, `EntityIcon`, `Pickers`, and
+  `useUndoableDelete`.
+
+**Six things worth not rediscovering:**
+
+1. **`exactOptionalPropertyTypes` is on.** Passing `undefined` to an optional
+   Astryx prop is a *type error*, not a no-op. Absent props must be spread
+   conditionally: `{...(x !== undefined && {prop: x})}`. This shows up
+   constantly; it is not a quirk of any one component.
+2. **`BaseProps` omits `inputMode`** (along with `autoFocus`, `spellCheck`,
+   `color` and a dozen others). Passing it compiles as an excess prop in some
+   positions and is silently dropped. Check
+   `node_modules/@astryxdesign/core/dist/BaseProps.d.ts` before assuming an
+   HTML attribute is forwarded.
+3. **`DateInput` speaks a template-literal type**, not `string`.
+   [format/dates.ts](src/format/dates.ts) declares a structurally identical
+   `ISODate` rather than importing Astryx's, so date handling does not depend
+   on a pre-1.0 type export. All epoch↔calendar conversion is local, never
+   `new Date(iso)` — that parses `YYYY-MM-DD` as **UTC** and lands on the
+   previous day west of Greenwich.
+4. **Dexie's typed `transaction()` overloads stop at five tables.** Beyond
+   that, pass an array. The union of eight differently-typed tables also makes
+   `database[name].bulkPut(...)` uncallable; narrow the *operation*, not the
+   row type (see `backup.ts`).
+5. **`Repository<Account>` is not a `Repository<SyncMeta>`** — `update(patch)`
+   is contravariant. Trash needs a repo-by-table-name map, so
+   [repositories.ts](src/db/repositories.ts) declares a narrow
+   `RestorableRepository` interface instead of widening with `any`.
+6. **Every amount renders through `MoneyText`**, which is what makes the
+   privacy toggle a single change rather than an audit. Where an amount is
+   part of a longer string ("৳420 of ৳6000") use `useMoneyFormatter()` —
+   calling `formatMoney` directly compiles fine and silently defeats privacy
+   mode for that one label.
+
+**Bundle: eager JS is 747kb raw / 235kb gzip across 21 chunks**, up just 16kb
+raw from Phase 2's 731kb — nine screens added, and route splitting absorbed
+almost all of it. CSS is 165kb / 29kb gzip.
+
+Colour swatches are the one place an inline `style` is correct: `colorHex` is
+per-row *user data*, and neither a design token nor `xstyle` (StyleX resolves
+at build time) can express a value chosen at runtime. Every *design* colour
+still comes from tokens.
+
+### ⬜ Phase 4 — Analytics
 visx + Motion in `src/charts/`. Build **one shared `ChartFrame`** (axes, grid,
 tooltip, legend) before any individual chart. Donut, month-over-month bars,
 cash-flow, net-worth trend. Colors from Astryx hue tokens so charts theme in
-light and dark. `computeAllBudgetProgress` is ready to render.
+light and dark. [AnalyticsPage.tsx](src/pages/AnalyticsPage.tsx) is the only
+remaining `PhasePlaceholder`.
+
+Budgets shipped in Phase 3, so `computeAllBudgetProgress` is already rendered
+on both [BudgetsPage](src/pages/BudgetsPage.tsx) and the dashboard — this phase
+is charts only.
 
 ### ⬜ Phase 5 — Supabase sync
 Mirror the Dexie schema in Postgres (snake_case), `user_id uuid references
@@ -291,8 +371,12 @@ idempotent, not duplicated.
 
 ### ⬜ Phase 7 — Packaging
 Capacitor Android + Tauri desktop, both consuming the same `dist/`.
-**Write `src/platform/fs.ts` (Capacitor | Tauri | browser) BEFORE wiring export
-in Phase 3**, or it gets written three times.
+[src/platform/fs.ts](src/platform/fs.ts) already exists (written in Phase 3, as
+this note asked). Wiring it up means calling `registerFileSaver(nativeSaver)`
+from each native entry point — **do not** add a conditional `import()` of
+`@capacitor/filesystem` to `fs.ts` itself, which is exactly what registration
+exists to avoid: an unresolvable specifier breaks the web build even inside a
+branch that never runs.
 
 ### ⬜ Phase 8 — Polish
 Route/shared-element transitions, list stagger, skeletons, desktop keyboard
@@ -323,12 +407,45 @@ custom composition.
   Astryx's i18n, being the full ICU message-format parser plus a 71kb `en.json`,
   eagerly loaded, for a single-user single-locale app. Worth asking whether
   Astryx can precompile messages or ship a lite locale before Phase 8.
-- **`Transactions` vs `Ledger` was a Phase 2 judgement call.** The Phase 3 list
-  names both without distinguishing them. They are currently scaffolded as:
-  Transactions = the filterable list of every entry across accounts; Ledger =
-  one account's register with a running balance, which is also how a suspect
-  derived balance gets checked. If that is not the intent, Phase 3 should
-  collapse them — it is two route stubs, not two implementations.
+- ~~**`Transactions` vs `Ledger` was a Phase 2 judgement call.**~~ Settled in
+  Phase 3, keeping both: Transactions answers "what have I spent on X?" across
+  every account and owns the filters and bulk actions; Ledger answers "how did
+  this account get to this number?" and owns the running balance. Different
+  questions, so they stayed separate.
+
+- **Phase 3 has not been click-tested in a real browser.** What *was* verified:
+  `tsc` clean, 126 tests, `astryx doctor` 6/6, a clean production build, the
+  Figtree invariant (2 × `font-family:Figtree`, 2 × `font-weight:300 900`, zero
+  `Figtree Variable`), and deep-link asset resolution against `npm run preview`
+  (`/ledger/abc123` serves `/assets/...`, HTTP 200). What was **not**: actually
+  opening a dialog, saving a row, or seeing the layouts. Phase 2 was verified
+  interactively and this was not, so treat the first run as a smoke test —
+  dialogs, the `ToggleButtonGroup` swatch strip and the mobile drawer are the
+  likeliest places for a layout surprise.
+
+- **Deleting an account orphans its transactions, quietly.** `computeBalances`
+  ignores a transaction pointing at an unknown account, so the rows survive in
+  the Transactions list showing "—" for the account, and drop out of every
+  balance. That is the *safe* direction (no phantom balances, and restoring the
+  account restores everything), but nothing warns the user first. The account
+  dialog already counts the affected transactions; a confirmation using that
+  count is the obvious fix, along with the same treatment for categories, which
+  currently just fall back to "Uncategorised".
+
+- **Restore does not enqueue to the outbox.** `importBackup` writes with
+  `bulkPut` deliberately, to preserve each row's original `updatedAt` — but
+  that means restored rows are invisible to the Phase 5 pusher. Phase 5 needs
+  to decide between enqueueing everything after a restore (and accepting that
+  last-write-wins may then favour the older copy) or treating a restore as a
+  full resync. Same family of problem as `purge()` not enqueueing.
+
+- **Reordering is up/down buttons, not drag-and-drop.** Accessible and fine for
+  fifteen categories; Phase 8 can add dragging on top of `applyDisplayOrder`,
+  which already takes a whole ordered list rather than a (from, to) pair.
+
+- **Privacy mode is not persisted, on purpose.** A hidden state surviving a
+  restart reads as data loss. It is a shoulder-surfing measure, not security —
+  the numbers are still in IndexedDB and one toggle away.
 - **Astryx pre-1.0 churn.** Keep Astryx behind wrappers in `src/components/` so
   breaking changes hit a few files, not every screen. Run
   `npx astryx upgrade --apply` after any core bump.
@@ -345,7 +462,7 @@ custom composition.
 ```bash
 npm run dev          # Vite dev server on :5173
 npm run build        # tsc -b && vite build
-npm test             # vitest run  (88 passing)
+npm test             # vitest run  (126 passing)
 npm run test:watch
 npm run preview      # serve dist/ on :4173 — use this, not `dev`, to check
                      # that deep links resolve their assets

@@ -4,6 +4,7 @@ import {Theme} from '@astryxdesign/core/theme';
 // pre-compiled theme.css imported in styles/global.css.
 import {neutralTheme} from '@astryxdesign/theme-neutral/built';
 import {LazyMotion, MotionConfig, domAnimation} from 'motion/react';
+import {PrivacyModeProvider} from './privacy-mode';
 import {ThemeModeProvider, useThemeMode} from './theme-mode';
 
 function ThemedApp({children}: {children: ReactNode}) {
@@ -32,7 +33,12 @@ export function Providers({children}: {children: ReactNode}) {
        */}
       <LazyMotion features={domAnimation} strict>
         <ThemeModeProvider>
-          <ThemedApp>{children}</ThemedApp>
+          {/* Inside the theme so a masked amount still renders in the right
+              colours; outside the router so toggling it does not reset on
+              navigation. */}
+          <PrivacyModeProvider>
+            <ThemedApp>{children}</ThemedApp>
+          </PrivacyModeProvider>
         </ThemeModeProvider>
       </LazyMotion>
     </MotionConfig>

@@ -13,6 +13,7 @@ import type {
   DebtPayment,
   PlannedException,
   PlannedTransaction,
+  SyncedTable,
   Transaction,
 } from './types';
 
@@ -25,3 +26,30 @@ export const plannedExceptionsRepo =
 export const debtsRepo = createRepository<Debt>('debts');
 export const debtPaymentsRepo = createRepository<DebtPayment>('debtPayments');
 export const budgetsRepo = createRepository<Budget>('budgets');
+
+/**
+ * The operations Trash needs, independent of what kind of row it is holding.
+ *
+ * Narrower than `Repository<T>` on purpose. A `Record<SyncedTable,
+ * Repository<SyncMeta>>` does not typecheck — `update(patch: RowPatch<T>)` is
+ * contravariant, so `Repository<Account>` is not a `Repository<SyncMeta>` —
+ * and widening it with `any` would throw away the type safety everywhere else.
+ * Trash only restores and purges, so that is all this asks for.
+ */
+export interface RestorableRepository {
+  restore(id: string): Promise<boolean>;
+  restoreMany(ids: readonly string[]): Promise<number>;
+  purge(id: string): Promise<void>;
+}
+
+/** Every syncable table's repository, keyed the way `useTrash` reports rows. */
+export const REPOSITORIES: Record<SyncedTable, RestorableRepository> = {
+  accounts: accountsRepo,
+  categories: categoriesRepo,
+  transactions: transactionsRepo,
+  plannedTransactions: plannedRepo,
+  plannedExceptions: plannedExceptionsRepo,
+  debts: debtsRepo,
+  debtPayments: debtPaymentsRepo,
+  budgets: budgetsRepo,
+};

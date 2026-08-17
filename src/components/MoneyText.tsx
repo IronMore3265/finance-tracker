@@ -10,8 +10,18 @@
  * Colour is never the only cue: the sign is always rendered too, so this stays
  * readable for colour-blind users and in a monochrome print.
  */
+import {useCallback} from 'react';
 import {Text} from '@astryxdesign/core/Text';
+import {usePrivacyMode} from '../app/privacy-mode';
 import {formatMoney, formatSignedMoney} from '../format/money';
+
+/**
+ * What a masked amount renders as.
+ *
+ * A fixed width rather than one dot per digit: matching the digit count would
+ * leak the order of magnitude, which is most of what a shoulder-surfer wants.
+ */
+const MASK = '••••';
 
 export interface MoneyTextProps {
   amount: number;
@@ -41,16 +51,21 @@ export function MoneyText({
   type = 'body',
   weight,
 }: MoneyTextProps) {
+  const {isHidden} = usePrivacyMode();
   const signed = hasSign || tone === 'signed' || tone === 'flow';
 
   // `flow` rows store a positive amount and carry the direction separately, so
   // the sign has to be applied here rather than read off the number.
   const display = tone === 'flow' && direction === 'out' ? -amount : amount;
-  const text = signed
-    ? formatSignedMoney(display, currency)
-    : formatMoney(display, currency);
+  const text = isHidden
+    ? MASK
+    : signed
+      ? formatSignedMoney(display, currency)
+      : formatMoney(display, currency);
 
-  const colour = colourClass(tone, display);
+  // Colour is dropped along with the digits: a red figure still says "you
+  // overspent", which is the sort of thing being hidden in the first place.
+  const colour = isHidden ? undefined : colourClass(tone, display);
 
   return (
     <Text
@@ -65,6 +80,25 @@ export function MoneyText({
     >
       {text}
     </Text>
+  );
+}
+
+/**
+ * `formatMoney`, but honouring "hide amounts on screen".
+ *
+ * For the places an amount is part of a longer string — "৳420 of ৳6000" under
+ * a budget bar — where a `<MoneyText>` cannot be nested. Calling `formatMoney`
+ * directly in a component works and is the easy mistake: it silently defeats
+ * privacy mode for that one label, which is exactly the kind of leak nobody
+ * notices until it matters. Use this instead.
+ */
+export function useMoneyFormatter(): (amount: number, currency?: string) => string {
+  const {isHidden} = usePrivacyMode();
+
+  return useCallback(
+    (amount: number, currency?: string) =>
+      isHidden ? MASK : formatMoney(amount, currency),
+    [isHidden],
   );
 }
 

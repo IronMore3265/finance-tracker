@@ -282,3 +282,14 @@ npx astryx docs layout       # read before building any page
 
 Supabase project `lwcelvtqpfvssxkabvun` is reachable via the Supabase MCP
 server, so migrations can be applied directly.
+
+### Environment notes
+
+- **Git identity is set repo-local** (`.git/config`) to `IronMore3265` /
+  `135731975+IronMore3265@users.noreply.github.com`. The noreply address keeps
+  a real email out of this public repo's permanent history. Do not switch it to
+  a real address.
+- **PowerShell 5.1 mangles multi-line arguments** passed to native commands, so
+  `git commit -m` with a multi-line message fails oddly. Write the message to a
+  file and use `git commit -F <file>`.
+- Commits so far go straight to `main`; there is no PR workflow set up.

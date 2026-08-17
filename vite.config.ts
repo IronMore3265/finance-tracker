@@ -49,6 +49,12 @@ export default defineConfig({
             {name: 'react', test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/},
             {name: 'router', test: /node_modules[\\/]react-router[\\/]/},
             {name: 'dexie', test: /node_modules[\\/]dexie[\\/]/},
+            // visx and the d3 modules under it are reached only from the
+            // Analytics route, so this group is loaded on demand rather than
+            // at boot. Naming it keeps that visible in the build output —
+            // if `charts` ever shows up in the initial download, something
+            // has imported a chart from a screen that should not have.
+            {name: 'charts', test: /node_modules[\\/](@visx|d3-[a-z]+|internmap)[\\/]/},
             // Every nav icon is its own module, and the nav needs all of them
             // up front. Left alone that is a dozen sub-kilobyte requests on
             // first load, where the round trips cost more than the bytes.

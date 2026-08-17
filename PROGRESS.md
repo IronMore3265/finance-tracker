@@ -3,7 +3,7 @@
 Handoff document. Read this first — it carries everything a fresh session needs
 so the research below never has to be repeated.
 
-**Last updated:** 2026-08-18 · Phases 0–3 complete.
+**Last updated:** 2026-08-18 · Phases 0–4 complete.
 
 ---
 
@@ -93,6 +93,25 @@ Hard-won; do not re-derive.
 - **Do NOT use `@astryxdesign/charts`.** It is canary-only and forces
   `@astryxdesign/core@canary`, destabilising the whole UI. Revisit only if it
   reaches the `latest` dist-tag.
+- **SVG marks take Tailwind `fill-*` / `stroke-*` classes, never JS colour
+  values.** `fill` and `stroke` are CSS properties, so
+  `className="fill-success"` resolves through the token live and the charts
+  re-theme on a light/dark switch with no prop, no re-render and no second
+  palette. Reading the tokens into JS the way [motion.ts](src/app/motion.ts)
+  reads the duration tokens would **not** work: durations are fixed for the
+  life of the document, colours change the moment the user flips the theme.
+  Write the class names out as literals — Tailwind discovers utilities by
+  scanning source text, so a composed `` `fill-${hue}` `` is never emitted and
+  the mark renders with no fill at all.
+- **The `--color-<hue>-ring` / `-vivid` Tailwind aliases are not usable for
+  chart marks.** `tailwind-theme.css` bridges only the `background` / `border`
+  / `text` variant of each hue, and deliberately omits the `icon` one. The
+  bridged `border-*` values are stepped for borders, not for marks on a
+  surface: `--color-border-orange` is `#EB6E00` in light and *darker* at
+  `#B34A01` in dark, which is backwards for a dark background. The `icon-*`
+  tokens are the correctly stepped ones and are reachable only as raw
+  `var(--color-icon-*)`. Phase 4 sidestepped this by not needing eight
+  categorical hues at all — see §6.
 
 ---
 
@@ -345,16 +364,111 @@ per-row *user data*, and neither a design token nor `xstyle` (StyleX resolves
 at build time) can express a value chosen at runtime. Every *design* colour
 still comes from tokens.
 
-### ⬜ Phase 4 — Analytics
-visx + Motion in `src/charts/`. Build **one shared `ChartFrame`** (axes, grid,
-tooltip, legend) before any individual chart. Donut, month-over-month bars,
-cash-flow, net-worth trend. Colors from Astryx hue tokens so charts theme in
-light and dark. [AnalyticsPage.tsx](src/pages/AnalyticsPage.tsx) is the only
-remaining `PhasePlaceholder`.
+### ✅ Phase 4 — Analytics
+**157 tests passing, `tsc` clean, `astryx doctor` 6/6, build clean.**
+**Not yet click-tested in a real browser** — see §7.
 
-Budgets shipped in Phase 3, so `computeAllBudgetProgress` is already rendered
+Replaces the old app's single 7-day line chart. Four charts, each answering a
+different question, all scoped by one range control in the page header.
+
+| Chart | File | Form | Colour job |
+|---|---|---|---|
+| Where the money went | [CategoryBars.tsx](src/charts/CategoryBars.tsx) | Horizontal bars | one hue |
+| Money in, money out | [CashFlowColumns.tsx](src/charts/CashFlowColumns.tsx) | Diverging columns | status pair |
+| What changed | [CategoryChangeBars.tsx](src/charts/CategoryChangeBars.tsx) | Diverging bars | status pair |
+| Net worth | [NetWorthArea.tsx](src/charts/NetWorthArea.tsx) | Line + area | one hue |
+
+- [domain/analytics.ts](src/domain/analytics.ts) — every aggregation, pure,
+  25 tests. The charts receive finished series and render them; no arithmetic
+  happens inside a component.
+- [charts/chrome.ts](src/charts/chrome.ts) — mark specs, chrome classes,
+  margins, `fitBand`, `truncateLabel`, `pointerIn`. 6 tests.
+- [charts/ChartFrame.tsx](src/charts/ChartFrame.tsx) — the shared frame, built
+  first as this note asked: heading, legend, measured plot, table twin.
+
+**The donut became a bar chart, on purpose.** This note asked for a donut; a
+donut compares *angles*, which is the hardest comparison to make by eye and
+fails precisely when two categories are close — the common case. Bars share a
+baseline, so "Food is a bit more than Transport" is readable at a glance, and
+they scale past six categories without the palette growing.
+
+**Seven things worth not rediscovering:**
+
+1. **The category charts deliberately do not encode identity in colour, and
+   this is the finding that shaped the whole phase.** The obvious design —
+   one hue per category, taken from each row's `colorHex` — cannot be made
+   safe, and it is worth knowing *why* rather than re-attempting it. Measured
+   with the data-viz validator against the real card surfaces (`#FFFFFF` /
+   `#1F1F22`): across the fifteen seeded categories the worst pair separates
+   by **ΔE 0.4** under simulated protanopia (Groceries olive vs Gift amber)
+   and **ΔE 5.6** under *normal* vision (Freelance mint vs Education teal),
+   against a floor of 15. Even a six-slice subset fails. This is not a bad
+   palette that better hexes would fix — fifteen classes cannot be pairwise
+   distinct, and users can set these colours to anything anyway. So bar
+   length carries the magnitude, the **row label** carries identity, every
+   bar is the same accent hue, and the category's own colour rides along as a
+   dot beside its name. Colour is decoration that agrees with the app; it is
+   never what the reader has to decode.
+2. **Income/expense wear the status tokens, and direction is what makes that
+   legal.** These series genuinely mean good and bad, so they take
+   `--color-success` / `--color-error` rather than categorical hues. Green
+   against red measures inside the CVD warn band — **ΔE 6.3** deuteranopia in
+   light mode (8.4 in dark), where 6–8 is legal *only* with a second,
+   non-colour channel. That channel is the layout: income grows **up** from a
+   zero baseline and expense grows **down**. Direction reads identically in
+   greyscale, in print, and under any colour blindness, and it is stronger
+   than the legend that also ships. Do not "simplify" these into side-by-side
+   grouped columns — that removes the mitigation, not just a layout choice.
+3. **The seeded category colours were wrong and are now measured.** The
+   comment on `ENTITY_COLORS` claimed Material's 500 shades "hold contrast on
+   both the light and dark theme surfaces". They do not: **nine of fifteen**
+   failed, `#FF9800` at 2.16:1 on the light card, `#3F51B5` at 2.39:1 on the
+   dark one, and `#795548`/`#607D8B`/`#9E9E9E` carrying so little chroma they
+   read as the same grey. Each replacement holds its hue and moves only
+   lightness into OKLCH L 0.48–0.67, the band where **one** hex clears 3:1
+   against **both** surfaces — the constraint that exists because a category
+   stores a single colour and the app has two themes. Seeding only touches a
+   database with no categories at all, so this changes a fresh install and
+   leaves every existing row alone.
+4. **Every chart has a table twin, and that is load-bearing rather than
+   polite.** It is what makes it legitimate for a value to be reachable only
+   by hovering, for a long category name to be truncated, and for a mark to
+   sit below 3:1. Delete the table and three separate compromises become
+   defects.
+5. **`ChartFrame` sizes the `<svg>` as `plotHeight + margins`.** Sizing a
+   container to the plot alone crops its own axis band and grows a tiny
+   nested scrollbar inside the card. The frame also renders nothing until it
+   has measured a width, so it holds the height open during load — otherwise
+   every card on the screen jumps downward on mount.
+6. **Pointer position comes from visx's `localPoint`, never
+   `event.nativeEvent.offsetX`.** `offsetX` is specified relative to the
+   *target's padding edge*, and SVG shapes have no padding box, so what
+   browsers report there has historically differed between engines — the
+   readout would sit correctly in one browser and be offset by a margin in
+   another. `localPoint` goes through `getScreenCTM` and answers in the SVG's
+   own coordinates. Wrapped as `pointerIn` in `chrome.ts`.
+7. **Net worth is cumulative from the start of the ledger, not from the start
+   of the range**, and its y-axis always includes zero. A range-relative
+   baseline would say your savings vanished whenever you changed the filter;
+   an auto-scaled axis turns a 2% wobble into a cliff, which is the most
+   common way a finance chart lies to the person reading it. Sampling is
+   lossless *at the points it emits* because the value is cumulative, which
+   is what makes downsampling a multi-year range safe.
+
+**Range presets are 3 / 6 / 12 months and All, calendar-month aligned, and
+the shortest is deliberately three.** The cash-flow chart plots one column per
+month, so a "this month" preset would render a one-column bar chart — which is
+a stat tile pretending to be a chart. "This month" is the dashboard's job.
+
+**Bundle: eager JS is 749kb raw / 237kb gzip across 24 chunks**, up 2kb raw
+from Phase 3. visx and its d3 dependencies are a named `charts` vendor group
+(67kb raw / 24kb gzip) reached only from the Analytics route — **if `charts`
+ever appears in `index.html`'s preload list, something has imported a chart
+from a screen that should not have.** CSS is 168kb / 31kb gzip.
+
+Budgets shipped in Phase 3, so `computeAllBudgetProgress` was already rendered
 on both [BudgetsPage](src/pages/BudgetsPage.tsx) and the dashboard — this phase
-is charts only.
+was charts only.
 
 ### ⬜ Phase 5 — Supabase sync
 Mirror the Dexie schema in Postgres (snake_case), `user_id uuid references
@@ -413,15 +527,26 @@ custom composition.
   this account get to this number?" and owns the running balance. Different
   questions, so they stayed separate.
 
-- **Phase 3 has not been click-tested in a real browser.** What *was* verified:
-  `tsc` clean, 126 tests, `astryx doctor` 6/6, a clean production build, the
-  Figtree invariant (2 × `font-family:Figtree`, 2 × `font-weight:300 900`, zero
-  `Figtree Variable`), and deep-link asset resolution against `npm run preview`
-  (`/ledger/abc123` serves `/assets/...`, HTTP 200). What was **not**: actually
-  opening a dialog, saving a row, or seeing the layouts. Phase 2 was verified
-  interactively and this was not, so treat the first run as a smoke test —
-  dialogs, the `ToggleButtonGroup` swatch strip and the mobile drawer are the
-  likeliest places for a layout surprise.
+- **Phases 3 and 4 have not been click-tested in a real browser.** What *was*
+  verified: `tsc` clean, 157 tests, `astryx doctor` 6/6, a clean production
+  build, the Figtree invariant (2 × `font-family:Figtree`, 2 ×
+  `font-weight:300 900`, zero `Figtree Variable`), deep-link asset resolution
+  against `npm run preview` (`/ledger/abc123` serves `/assets/...`, HTTP 200),
+  and — for Phase 4 specifically — that **every chart utility class is
+  actually present in the built CSS** and resolves to an Astryx token
+  (`.fill-accent-bg{fill:var(--color-accent)}` and the fifteen others). That
+  last check matters more than it sounds: a mistyped or composed class name
+  produces a chart with no fill, which type-checks, builds, and renders an
+  empty card.
+
+  What was **not** verified: actually opening a dialog, saving a row, or
+  seeing any layout. Phase 2 was verified interactively and these two were
+  not, so treat the first run as a smoke test. Likeliest surprises: Phase 3's
+  dialogs, the `ToggleButtonGroup` swatch strip and the mobile drawer; Phase
+  4's left label column (the truncation budget is a character count, not a
+  measurement, so a run of wide glyphs is the case to look at), the tooltip
+  placement near the right edge of a card, and the charts at a narrow mobile
+  width where the axis-label stride does the most work.
 
 - **Deleting an account orphans its transactions, quietly.** `computeBalances`
   ignores a transaction pointing at an unknown account, so the rows survive in
@@ -438,6 +563,23 @@ custom composition.
   to decide between enqueueing everything after a restore (and accepting that
   last-write-wins may then favour the older copy) or treating a restore as a
   full resync. Same family of problem as `purge()` not enqueueing.
+
+- **Privacy mode masks chart *numbers*, not chart *shapes*.** Axis ticks, bar
+  labels and tooltips route through `useCompactMoneyFormatter` /
+  `useMoneyFormatter` and render as `••••` when amounts are hidden, but the
+  bars and the net-worth line still draw at their true lengths — so relative
+  magnitude is still visible over someone's shoulder. That is the intended
+  trade: masking the marks as well would leave four empty cards rather than a
+  chart with its figures covered, and privacy mode is a shoulder-surfing
+  measure rather than a redaction. Revisit only if that judgement turns out to
+  be wrong in practice.
+
+- **`categoryChanges` compares against the immediately preceding span, and
+  `ALL` therefore has nothing to compare against.** The "What changed" chart
+  renders an explanatory empty state on that preset rather than inventing a
+  baseline. Fine as it stands; worth revisiting only if a user asks for
+  year-over-year rather than period-over-period, which is a different
+  comparison and would need its own range.
 
 - **Reordering is up/down buttons, not drag-and-drop.** Accessible and fine for
   fifteen categories; Phase 8 can add dragging on top of `applyDisplayOrder`,
@@ -462,7 +604,7 @@ custom composition.
 ```bash
 npm run dev          # Vite dev server on :5173
 npm run build        # tsc -b && vite build
-npm test             # vitest run  (126 passing)
+npm test             # vitest run  (157 passing)
 npm run test:watch
 npm run preview      # serve dist/ on :4173 — use this, not `dev`, to check
                      # that deep links resolve their assets

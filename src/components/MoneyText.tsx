@@ -13,7 +13,7 @@
 import {useCallback} from 'react';
 import {Text} from '@astryxdesign/core/Text';
 import {usePrivacyMode} from '../app/privacy-mode';
-import {formatMoney, formatSignedMoney} from '../format/money';
+import {formatCompactMoney, formatMoney, formatSignedMoney} from '../format/money';
 
 /**
  * What a masked amount renders as.
@@ -98,6 +98,30 @@ export function useMoneyFormatter(): (amount: number, currency?: string) => stri
   return useCallback(
     (amount: number, currency?: string) =>
       isHidden ? MASK : formatMoney(amount, currency),
+    [isHidden],
+  );
+}
+
+/**
+ * `formatCompactMoney`, but honouring "hide amounts on screen".
+ *
+ * For axis ticks and bar-tip labels, which are SVG `<text>` and so cannot host
+ * a `<MoneyText>`. Same trap as `useMoneyFormatter`: reaching for
+ * `formatCompactMoney` directly compiles and silently leaks every value on the
+ * chart, which is a worse leak than a single label because a chart shows the
+ * whole range at once.
+ *
+ * The *marks* are not masked, only the numbers — a bar's length still says
+ * "this one is roughly twice that one". Privacy mode is a shoulder-surfing
+ * measure, not a redaction, and hiding the shapes as well would leave a card
+ * with nothing in it rather than a chart with its figures covered.
+ */
+export function useCompactMoneyFormatter(): (amount: number, currency?: string) => string {
+  const {isHidden} = usePrivacyMode();
+
+  return useCallback(
+    (amount: number, currency?: string) =>
+      isHidden ? MASK : formatCompactMoney(amount, currency),
     [isHidden],
   );
 }

@@ -132,24 +132,36 @@ export function EntityIcon({name, color, size = 'md', label}: EntityIconProps) {
 /**
  * The colours offered when creating a category or account.
  *
- * Starts from the palette the seed data already uses, so a fresh database and
- * a user-created row look like they belong to the same app. Material's 500
- * shades: they were the old app's palette, and they hold contrast on both the
- * light and dark theme surfaces.
+ * The same palette the seed data uses, so a fresh database and a user-created
+ * row look like they belong to the same app.
+ *
+ * This was Material's 500 shades, carried over from the old app, with a
+ * comment claiming they "hold contrast on both the light and dark theme
+ * surfaces". Phase 4 measured that claim and it was false: `#FF9800` sits at
+ * 2.16:1 on the light card, `#3F51B5` at 2.39:1 on the dark one, and the
+ * greys carry too little chroma to read as a colour at all. Each entry here
+ * keeps its hue and moves only its lightness into the band where a single hex
+ * clears 3:1 against **both** surfaces — the constraint that makes one stored
+ * colour work in both themes.
+ *
+ * Ordered around the wheel rather than by hue family, so the swatch strip in
+ * the category dialog reads as a spectrum and two adjacent choices are never
+ * near-identical.
  */
 export const ENTITY_COLORS = [
-  '#EA3B35',
-  '#E91E63',
-  '#9C27B0',
-  '#3F51B5',
-  '#2196F3',
-  '#00BCD4',
-  '#009688',
-  '#4CAF50',
-  '#8BC34A',
-  '#FF9800',
-  '#795548',
-  '#607D8B',
-  '#F44336',
-  '#9E9E9E',
+  '#EA3B35', // red
+  '#D42A6D', // rose
+  '#E0407F', // pink
+  '#A537B8', // purple
+  '#4C61C7', // indigo
+  '#2196F3', // blue
+  '#007296', // deep cyan
+  '#00A3B8', // cyan
+  '#009688', // teal
+  '#2E9E6B', // mint
+  '#007B17', // green
+  '#5C9000', // olive
+  '#D47D00', // amber
+  '#A15437', // brown
+  '#767676', // neutral
 ] as const;

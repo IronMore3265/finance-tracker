@@ -1,10 +1,10 @@
 /**
- * Appearance, privacy, and getting data in and out.
+ * Appearance, privacy, sync, and getting data in and out.
  *
  * The export/restore pair is what makes the advice in PROGRESS.md §7 —
  * "keep the old app installed until Phase 6 verification passes" — honest.
- * Two copies of real financial data beats one behind unproven sync, and until
- * Phase 5 exists a file is the only second copy there is.
+ * Two copies of real financial data beats one behind unproven sync, and a
+ * file is a second copy that depends on nothing.
  *
  * Saving goes through `platform/fs.ts` rather than touching an anchor here, so
  * Phase 7 can register a Capacitor or Tauri saver without this screen
@@ -36,6 +36,7 @@ import {
   type ImportMode,
 } from '../db/backup';
 import {activeFileSaverName, saveFile, timestampedFileName} from '../platform/fs';
+import {SyncSettings} from '../sync/SyncSettings';
 import {Page} from '../components/Page';
 
 export function SettingsPage() {
@@ -117,7 +118,7 @@ export function SettingsPage() {
   return (
     <Page
       title="Settings"
-      description="Appearance, privacy, and getting your data in and out."
+      description="Appearance, privacy, sync, and getting your data in and out."
     >
       <Section>
         <Stack gap={3}>
@@ -149,9 +150,9 @@ export function SettingsPage() {
           <Stack gap={1}>
             <Heading level={2}>Privacy</Heading>
             <Text type="supporting" as="p">
-              Everything stays on this device. There is no account, no
-              telemetry, and no network request — optional cloud sync arrives in
-              a later version and will be off unless you turn it on.
+              There is no telemetry and no analytics, and nothing leaves this
+              device unless you turn on cloud sync below — which is off until
+              you sign in, and stays off if you never do.
             </Text>
           </Stack>
           <Switch
@@ -165,6 +166,8 @@ export function SettingsPage() {
           />
         </Stack>
       </Section>
+
+      <SyncSettings />
 
       <Section>
         <Stack gap={3}>

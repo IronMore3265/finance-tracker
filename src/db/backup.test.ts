@@ -9,6 +9,7 @@ import {
   summarizeBackup,
 } from './backup';
 import {createTestDatabase, type FinanceDatabase} from './db';
+import {getMeta, setMeta} from './meta';
 import {createRepository} from './repo';
 import type {Account, Category, Transaction} from './types';
 
@@ -207,5 +208,78 @@ describe('importBackup', () => {
 describe('parseBackupText', () => {
   it('reports unreadable files in plain language', () => {
     expect(() => parseBackupText('not json at all')).toThrow(/not valid JSON/);
+  });
+});
+
+/**
+ * A restore writes rows behind the repositories' backs, so it has to take
+ * responsibility for the two things they would otherwise have done: telling
+ * the pusher there is something to send, and invalidating what this device
+ * believed about the server.
+ */
+describe('a restore and the sync layer', () => {
+  it('queues every restored row for push', async () => {
+    await accounts.create(account({name: 'Cash'}));
+    await accounts.create(account({name: 'Bank'}));
+    const backup = await exportBackup(db);
+    // Stand in for a fresh device: rows arriving, nothing queued.
+    await db.outbox.clear();
+
+    await importBackup(backup, 'replace', db);
+
+    expect(await db.outbox.count()).toBe(2);
+    expect((await db.outbox.toArray()).map((entry) => entry.table)).toEqual([
+      'accounts',
+      'accounts',
+    ]);
+  });
+
+  it('keeps one entry per row rather than a second alongside a pending one', async () => {
+    const cash = await accounts.create(account());
+    const backup = await exportBackup(db);
+
+    // The row is already waiting to be pushed when the restore lands on it.
+    await importBackup(backup, 'merge', db);
+
+    const entries = await db.outbox.toArray();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({table: 'accounts', rowId: cash.id});
+  });
+
+  it('forgets the sync cursors, so the next pull starts over', async () => {
+    await accounts.create(account());
+    const backup = await exportBackup(db);
+    await setMeta('sync.cursor.accounts', {updatedAt: 5_000, id: 'x'}, db);
+    await setMeta('sync.userId', 'someone', db);
+
+    await importBackup(backup, 'replace', db);
+
+    // The cursor described rows that have just been replaced wholesale, so
+    // keeping it would silently skip everything on the server up to that
+    // point — the restore would look complete and be missing whatever it
+    // never asked for.
+    expect(await getMeta('sync.cursor.accounts', db)).toBeUndefined();
+    expect(await getMeta('sync.userId', db)).toBeUndefined();
+  });
+
+  it('leaves settings that are not sync bookkeeping alone', async () => {
+    await setMeta('someOtherSetting', 'keep me', db);
+    const backup = await exportBackup(db);
+
+    await importBackup(backup, 'replace', db);
+
+    expect(await getMeta('someOtherSetting', db)).toBe('keep me');
+  });
+
+  it('does not re-stamp updatedAt, so the backup cannot beat a newer remote row', async () => {
+    const cash = await accounts.create(account());
+    const backup = await exportBackup(db);
+    await db.accounts.clear();
+
+    await importBackup(backup, 'replace', db);
+
+    // The restored row competes on its original merits. Re-stamping it would
+    // make restoring a precautionary backup quietly roll the cloud back.
+    expect((await db.accounts.get(cash.id))?.updatedAt).toBe(cash.updatedAt);
   });
 });

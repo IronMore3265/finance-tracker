@@ -59,6 +59,12 @@ export default defineConfig({
             // up front. Left alone that is a dozen sub-kilobyte requests on
             // first load, where the round trips cost more than the bytes.
             {name: 'icons', test: /node_modules[\\/]lucide-react[\\/]/},
+            // Reached only through `await import()` in sync/client.ts, so a
+            // user who never signs in never downloads it. Named for the same
+            // reason `charts` is: if `supabase` ever appears in the initial
+            // preload list, something has imported the SDK statically and
+            // sync has stopped being opt-in.
+            {name: 'supabase', test: /node_modules[\\/]@supabase[\\/]/},
           ],
         },
       },

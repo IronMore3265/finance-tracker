@@ -23,6 +23,8 @@
  */
 import type {FinanceDatabase} from './db';
 import {db as defaultDb} from './db';
+import {clearSyncState} from './meta';
+import {enqueueOutbox} from './repo';
 import {SYNCED_TABLES, type SyncedTable} from './types';
 
 /** Bumped only when the shape changes in a way an older reader cannot handle. */
@@ -117,6 +119,19 @@ export type ImportMode =
  * `updatedAt`. Going through `repo.create` would re-stamp every row with the
  * time of the restore, which would make a restored copy beat a newer remote
  * row under last-write-wins.
+ *
+ * That left a gap Phase 5 had to close, because `bulkPut` also skips the
+ * outbox: restored rows were invisible to the pusher, so a restore reached the
+ * cloud only for whatever happened to be edited afterwards. The fix is the
+ * last two steps below — queue every restored row, and forget the sync
+ * cursors so the next cycle re-reads the server from the beginning.
+ *
+ * **A restore does not force the backup onto the cloud.** Every restored row
+ * keeps its original `updatedAt`, so the next sync resolves each one on its
+ * merits: an old row loses to a newer copy on the server, which is the whole
+ * point of restoring from a backup being safe. Making the backup win outright
+ * would mean re-stamping every row, and a restore-as-a-precaution would then
+ * silently roll the cloud back to yesterday.
  */
 export async function importBackup(
   parsed: unknown,
@@ -128,8 +143,16 @@ export async function importBackup(
 
   await database.transaction(
     'rw',
-    SYNCED_TABLES.map((name) => database[name]),
+    [
+      ...SYNCED_TABLES.map((name) => database[name]),
+      database.outbox,
+      database.meta,
+    ],
     async () => {
+      // Whatever this device had already pushed or pulled describes rows that
+      // are about to be replaced, so the record of it is discarded with them.
+      await clearSyncState(database);
+
       for (const name of SYNCED_TABLES) {
         const rows = file.tables[name];
         if (!Array.isArray(rows)) continue;
@@ -146,6 +169,18 @@ export async function importBackup(
 
         if (mode === 'replace') await table.clear();
         if (rows.length > 0) await table.bulkPut(rows);
+
+        // Queue what was just written, through the same helper every other
+        // write uses so a row already waiting to be pushed keeps one entry
+        // rather than gaining a second. `queuedAt` is the restore's own clock
+        // rather than the row's, because it orders the *push*, not the
+        // conflict resolution — `updatedAt` is what decides who wins, and it
+        // is untouched.
+        const queuedAt = Date.now();
+        for (const row of rows as {id?: unknown}[]) {
+          if (typeof row.id !== 'string') continue;
+          await enqueueOutbox(database, name, row.id, queuedAt);
+        }
       }
     },
   );

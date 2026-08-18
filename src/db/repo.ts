@@ -44,8 +44,14 @@ function table<T extends SyncMeta>(database: FinanceDatabase, name: SyncedTable)
  * The outbox records *that* a row changed, not what changed, so the pusher
  * always sends the current state. Editing one row ten times offline therefore
  * costs one entry and one push, not ten.
+ *
+ * Exported because a restore has to queue rows too (see backup.ts) and it
+ * writes them with `bulkPut` rather than through this file. Re-implementing
+ * the collapse there would be one `bulkPut` away from a queue with duplicate
+ * entries for a row — which pushes fine, and then quietly stops matching what
+ * every other part of the sync layer assumes.
  */
-async function enqueue(
+export async function enqueueOutbox(
   database: FinanceDatabase,
   tableName: SyncedTable,
   rowId: string,
@@ -110,7 +116,7 @@ export function createRepository<T extends SyncMeta>(
 
       await write(async () => {
         await rows().put(row);
-        await enqueue(database, tableName, row.id, at);
+        await enqueueOutbox(database, tableName, row.id, at);
       });
 
       return row;
@@ -133,7 +139,7 @@ export function createRepository<T extends SyncMeta>(
       await write(async () => {
         await rows().bulkPut(built);
         for (const row of built) {
-          await enqueue(database, tableName, row.id, at);
+          await enqueueOutbox(database, tableName, row.id, at);
         }
       });
 
@@ -152,7 +158,7 @@ export function createRepository<T extends SyncMeta>(
         const at = now();
         const updated = {...existing, ...patch, updatedAt: at} as T;
         await rows().put(updated);
-        await enqueue(database, tableName, id, at);
+        await enqueueOutbox(database, tableName, id, at);
         return updated;
       });
     },
@@ -165,7 +171,7 @@ export function createRepository<T extends SyncMeta>(
 
         const at = now();
         await rows().put({...existing, deletedAt: at, updatedAt: at});
-        await enqueue(database, tableName, id, at);
+        await enqueueOutbox(database, tableName, id, at);
         return true;
       });
     },
@@ -179,7 +185,7 @@ export function createRepository<T extends SyncMeta>(
           const existing = await rows().get(id);
           if (!existing || existing.deletedAt !== null) continue;
           await rows().put({...existing, deletedAt: at, updatedAt: at});
-          await enqueue(database, tableName, id, at);
+          await enqueueOutbox(database, tableName, id, at);
           count += 1;
         }
 
@@ -195,7 +201,7 @@ export function createRepository<T extends SyncMeta>(
 
         const at = now();
         await rows().put({...existing, deletedAt: null, updatedAt: at});
-        await enqueue(database, tableName, id, at);
+        await enqueueOutbox(database, tableName, id, at);
         return true;
       });
     },
@@ -209,7 +215,7 @@ export function createRepository<T extends SyncMeta>(
           const existing = await rows().get(id);
           if (!existing || existing.deletedAt === null) continue;
           await rows().put({...existing, deletedAt: null, updatedAt: at});
-          await enqueue(database, tableName, id, at);
+          await enqueueOutbox(database, tableName, id, at);
           count += 1;
         }
 

@@ -5,6 +5,7 @@ import {Theme} from '@astryxdesign/core/theme';
 import {neutralTheme} from '@astryxdesign/theme-neutral/built';
 import {LazyMotion, MotionConfig, domAnimation} from 'motion/react';
 import {PrivacyModeProvider} from './privacy-mode';
+import {SyncProvider} from '../sync/sync-context';
 import {ThemeModeProvider, useThemeMode} from './theme-mode';
 
 function ThemedApp({children}: {children: ReactNode}) {
@@ -37,7 +38,16 @@ export function Providers({children}: {children: ReactNode}) {
               colours; outside the router so toggling it does not reset on
               navigation. */}
           <PrivacyModeProvider>
-            <ThemedApp>{children}</ThemedApp>
+            {/*
+             * Outside the router for the same reason: a cycle in flight must
+             * not be cancelled by navigating to another screen. Mounting it
+             * costs nothing on a device that has never signed in — it reads
+             * one localStorage key and, finding no opt-in, never loads the
+             * Supabase SDK at all. See sync/client.ts.
+             */}
+            <SyncProvider>
+              <ThemedApp>{children}</ThemedApp>
+            </SyncProvider>
           </PrivacyModeProvider>
         </ThemeModeProvider>
       </LazyMotion>

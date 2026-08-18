@@ -22,7 +22,7 @@ adds per-category budgets and real analytics, and runs on more than one device.
 | Build | Vite 8, Tailwind v4 |
 | Animation | [Motion](https://motion.dev) |
 | Storage | Dexie (IndexedDB), offline-first |
-| Sync | Supabase — opt-in; the app works fully logged-out |
+| Sync | Supabase — opt-in; the app works fully logged-out. Needs `.env`, see [.env.example](.env.example) |
 | Charts | visx |
 | Packaging | Capacitor (Android), Tauri (desktop) |
 

@@ -3,7 +3,7 @@
 Handoff document. Read this first — it carries everything a fresh session needs
 so the research below never has to be repeated.
 
-**Last updated:** 2026-08-18 · Phases 0–4 complete.
+**Last updated:** 2026-08-18 · Phases 0–5 complete.
 
 ---
 
@@ -37,7 +37,7 @@ Three problems drove the rewrite:
 | Build | Vite 8 + Tailwind v4 | Astryx needs **no** Vite/PostCSS/Babel plugin |
 | Animation | Motion 13 (`motion/react`) | Astryx ships motion *tokens* only, no engine |
 | Local store | Dexie 4 (IndexedDB) | Source of truth, offline-first |
-| Sync | Supabase `lwcelvtqpfvssxkabvun` | Live, Postgres 17, ap-northeast-2, **0 tables** |
+| Sync | Supabase `lwcelvtqpfvssxkabvun` | Live, Postgres 17, ap-northeast-2, **8 tables + RLS** |
 | Auth | Email/password, single user, RLS on `user_id` | Sync **opt-in**; app must work logged-out |
 | Charts | visx + Motion | Chosen over Recharts for design control |
 | Android | Capacitor 8 | |
@@ -48,7 +48,8 @@ Three problems drove the rewrite:
 
 ## 3. Verified Astryx facts
 
-Hard-won; do not re-derive.
+Hard-won; do not re-derive. Supabase's equivalents are at the end of this
+section.
 
 - **Discover, don't guess.** `npx astryx component <Name>` prints exact props.
   `npx astryx build "<idea>"`, `astryx template --list`, `astryx docs <topic>`.
@@ -112,6 +113,59 @@ Hard-won; do not re-derive.
   tokens are the correctly stepped ones and are reachable only as raw
   `var(--color-icon-*)`. Phase 4 sidestepped this by not needing eight
   categorical hues at all — see §6.
+
+---
+
+### Verified Supabase facts
+
+Same rule: hard-won, do not re-derive. All of these were confirmed against the
+live project by `npm run test:sync`, not reasoned about.
+
+- **The push must be arbitrated by the server, or two devices never converge.**
+  A plain upsert is "last request in wins", which is not the same as
+  "last edit wins". The device holding the *older* offline edit reconnecting
+  second overwrites the newer row; it then pulls its own row back and ties, and
+  the other device's cursor is already past that timestamp so it never hears
+  about the overwrite. Both sides are then permanently divergent with no event
+  that would fix it. The `reject_stale_write` BEFORE UPDATE trigger returns
+  `null` for any row whose `updated_at` is not strictly newer, which makes the
+  stale push a no-op; the pull that follows *in the same cycle* then hands that
+  device the winning version. **This is load-bearing — the client-side
+  `remoteWins` check alone is not enough.**
+- **Pull cursors must be a keyset `(updated_at, id)`, not a timestamp.**
+  `createMany` stamps a whole batch with one millisecond, so page boundaries
+  landing inside a tie are the normal case. A `updated_at > last` cursor
+  silently skips the remainder of the tie. PostgREST has no row constructor, so
+  it is spelled out:
+  `or(updated_at.gt."T",and(updated_at.eq."T",id.gt."ID"))`.
+- **No foreign keys between the eight tables, on purpose.** The client
+  tolerates dangling references by design (a transaction whose account was
+  deleted survives and drops out of balances). Enforcing them server-side would
+  reject pushes for states the app deliberately allows and make push order
+  load-bearing. The only FK is `user_id -> auth.users`, which cascades.
+- **No `updated_at` trigger.** The obvious Postgres reflex — stamp `now()` on
+  write — would destroy the field last-write-wins compares on.
+- **`timestamptz` round-trips epoch milliseconds losslessly.**
+  `Date.parse(new Date(ms).toISOString())` returns `ms`, and PostgREST renders
+  with a `+00:00` offset and sometimes microsecond precision, both of which
+  `Date.parse` handles. Chosen over `bigint` so the dashboard is readable when
+  sync misbehaves, which is the only time anyone looks.
+- **Write RLS policies as `(select auth.uid()) = user_id`.** The subquery form
+  is evaluated once per statement rather than once per row; a bare `auth.uid()`
+  trips a performance advisory.
+- **RLS filtering is not an error.** A signed-out client reading a protected
+  table gets `200` and `[]`, not a failure. Assert on row count — asserting on
+  `error !== null` passes for the wrong reason.
+- **A hand-made `auth.users` row must have empty strings, not NULL**, in
+  `confirmation_token`, `recovery_token`, `email_change_token_new`,
+  `email_change_token_current`, `email_change`, `phone_change`,
+  `phone_change_token` and `reauthentication_token`. GoTrue scans them into
+  non-nullable Go strings, so a NULL fails every sign-in with the thoroughly
+  unhelpful "Database error querying schema". Needed because Supabase rejects
+  obviously fake email domains (`@example.com`) at signup, and anything it
+  accepts would mail a real person.
+- **Use the `sb_publishable_...` key, not the legacy anon JWT.** Both work;
+  only the publishable one rotates independently.
 
 ---
 
@@ -470,13 +524,80 @@ Budgets shipped in Phase 3, so `computeAllBudgetProgress` was already rendered
 on both [BudgetsPage](src/pages/BudgetsPage.tsx) and the dashboard — this phase
 was charts only.
 
-### ⬜ Phase 5 — Supabase sync
-Mirror the Dexie schema in Postgres (snake_case), `user_id uuid references
-auth.users`, RLS `auth.uid() = user_id` on all four operations. Outbox worker,
-pull where `updated_at > lastPulledAt`, **last-write-wins on `updatedAt`**.
-Recompute derived balances after every pull. Test a row edited on two devices
-while both offline. Escape hatch if hand-rolling proves fiddly: PowerSync /
-ElectricSQL.
+### ✅ Phase 5 — Supabase sync
+Eight tables mirroring the Dexie schema in snake_case, `user_id uuid references
+auth.users on delete cascade`, RLS on all four operations, and a
+`(user_id, updated_at, id)` index per table matching the puller's keyset order.
+Applied as three migrations: `create_sync_tables`,
+`revoke_rls_auto_enable_from_api_roles` and `reject_stale_writes`.
+
+The client side is four files under [src/sync/](src/sync/), split so that
+everything with a rule behind it is testable without a network:
+
+- [mapping.ts](src/sync/mapping.ts) — camelCase↔snake_case and epoch
+  ms↔`timestamptz`. The column names are *derived* rather than declared, so
+  adding a field to `types.ts` needs no edit here; only the list of which
+  fields are timestamps is written by hand.
+- [remote.ts](src/sync/remote.ts) — the `SyncRemote` interface and its Supabase
+  implementation. The engine talks in local row terms, so this is the only
+  file that knows PostgREST exists — which is also what makes the PowerSync /
+  ElectricSQL escape hatch a matter of writing another implementation rather
+  than rewriting the engine.
+- [engine.ts](src/sync/engine.ts) — drain the outbox, then pull past the
+  cursor. Push first, so the server has seen this device's edits before it is
+  asked what the truth is.
+- [sync-context.tsx](src/sync/sync-context.tsx) — when a cycle runs: on
+  sign-in, on a local change (debounced 2s), on `online`, on tab focus, and a
+  5-minute poll. One cycle at a time; a request arriving mid-cycle sets a flag
+  rather than starting a race.
+
+UI is one section on Settings ([SyncSettings.tsx](src/sync/SyncSettings.tsx)) —
+sync is a setting, not a destination. It shows the pending-change count and the
+real error text, because "Synced" with a queue behind it is the claim that
+would cost someone data, and a generic failure message makes a wrong password,
+an expired session and a dead connection indistinguishable.
+
+**Three invariants the code depends on**, each a bug that would be hard to see:
+a pull never enqueues (or a pulled row is pushed straight back, forever); an
+outbox entry is cleared only if its `queuedAt` is unchanged (or an edit made
+during the request is dropped); and the `userId` write-back after a push does
+not touch `updatedAt` (or every successfully pushed row immediately re-queues
+itself and the queue never empties).
+
+**Derived balances need no recompute step.** Balances are a pure function of
+the ledger read through `useLiveQuery`, so a `bulkPut` from the puller
+re-renders them. That was on the plan as a task and turned out to be a
+property the Phase 1 decision already bought.
+
+**Two open items from §7 were closed here.** A restore now enqueues every
+restored row and clears the sync cursors, so it is visible to the pusher — but
+it does *not* re-stamp `updatedAt`, so a restore does not force the backup onto
+the cloud. Each row competes on its merits, which is what makes restoring a
+precautionary backup safe rather than a silent rollback of everyone else's
+week. `enqueueOutbox` moved out of `repo.ts` to be shared rather than
+reimplemented, because a second copy of the collapse logic is one `bulkPut`
+away from a queue with duplicate entries.
+
+**Verification.** 214 unit tests (52 new), including the two-devices-offline
+case this plan asked for, run against an in-memory fake server. Because a fake
+cannot test what the real server enforces, `npm run test:sync`
+([scripts/sync-e2e.ts](scripts/sync-e2e.ts)) runs 27 checks against the live
+project: a row in every one of the eight tables with every column populated,
+millisecond precision, `text[]`, `jsonb`, nullable timestamps, keyset paging
+across a tie, soft-delete replication, the stale-write trigger, and RLS from
+both another account and a signed-out client. All pass. **The test users are
+deleted afterwards** — the SQL to recreate them is in the script's header,
+and `E2E_PASSWORD` goes in `.env`.
+
+**Bundle: eager JS is 758kb raw / 241kb gzip across 24 chunks**, up 9kb raw
+from Phase 4 — the provider and its context, not the SDK.
+`@supabase/supabase-js` is a named `supabase` vendor group of **209kb raw /
+54kb gzip that is not in the initial download at all**, because it is reached
+only through `await import()` and only on a device that has signed in before
+(`hasOptedIn`, a localStorage flag this app owns rather than a guess at
+Supabase's storage key). **If `supabase` ever appears in `index.html`'s preload
+list, something has imported the SDK statically and sync has stopped being
+opt-in.** CSS is unchanged at 168kb / 31kb gzip.
 
 ### ⬜ Phase 6 — Migration importer
 Lazy-loaded SheetJS, four sheets, name-based resolution, **diff preview**,
@@ -511,8 +632,8 @@ custom composition.
   which is worth doing on its own merits — those change only on upgrades, so a
   returning user re-fetches app code and not the framework.
 
-  Honest numbers: **eager JS is 731kb raw / 227kb gzip across 13 chunks**, up
-  from Phase 1's 524kb / 159kb single chunk. The growth is real work, not bloat:
+  Honest numbers: **eager JS is 758kb raw / 241kb gzip across 24 chunks** as of
+  Phase 5, up from Phase 1's 524kb / 159kb single chunk. The growth is real work, not bloat:
   react-router (89kb) and dexie (95kb) are both newly on the boot path, plus
   AppShell/SideNav/MobileNav. Route splitting is doing its job — each page chunk
   is under 1kb.
@@ -527,7 +648,16 @@ custom composition.
   this account get to this number?" and owns the running balance. Different
   questions, so they stayed separate.
 
-- **Phases 3 and 4 have not been click-tested in a real browser.** What *was*
+- **Phases 3, 4 and 5 have not been click-tested in a real browser.** Phase 5's
+  *engine* is the best-verified thing in the repo — 27 checks against the live
+  Supabase project, plus 52 unit tests — but that verification is entirely
+  headless. What nobody has done is type a password into the form. Likeliest
+  surprises there: the `TextInput type="password"` field, `StatusDot` inside a
+  horizontal `Stack`, whether the sign-up confirmation banner appears at all
+  (it depends on the project's email-confirmation setting, which was never
+  changed from its default), and the first-run case where a real account signs
+  in on a device that already holds seeded categories — those get pushed, which
+  is correct, but nobody has watched it happen. What *was*
   verified: `tsc` clean, 157 tests, `astryx doctor` 6/6, a clean production
   build, the Figtree invariant (2 × `font-family:Figtree`, 2 ×
   `font-weight:300 900`, zero `Figtree Variable`), deep-link asset resolution
@@ -557,12 +687,23 @@ custom composition.
   count is the obvious fix, along with the same treatment for categories, which
   currently just fall back to "Uncategorised".
 
-- **Restore does not enqueue to the outbox.** `importBackup` writes with
-  `bulkPut` deliberately, to preserve each row's original `updatedAt` — but
-  that means restored rows are invisible to the Phase 5 pusher. Phase 5 needs
-  to decide between enqueueing everything after a restore (and accepting that
-  last-write-wins may then favour the older copy) or treating a restore as a
-  full resync. Same family of problem as `purge()` not enqueueing.
+- ~~**Restore does not enqueue to the outbox.**~~ Closed in Phase 5, and the
+  answer was both of the options it offered: a restore enqueues every row *and*
+  clears the sync cursors, so the next cycle pushes everything and re-reads the
+  server from the beginning. `updatedAt` is still not re-stamped, so
+  last-write-wins may indeed favour the copy already in the cloud — which is
+  the correct outcome, not a concession. A backup restored as a precaution
+  should not silently roll back a newer copy.
+
+- **`purge()` still does not enqueue, and a peer can push a purged row back.**
+  Unchanged from Phase 3, and now with a name: there is no tombstone protocol,
+  so "forget this row entirely" cannot be expressed to peers. Emptying the
+  trash is local-only. The row is gone here and stays on any device that has
+  not emptied its own trash, and that device will re-push it. Only purge rows
+  whose soft delete has already synced, and expect a purge to be undone by a
+  peer that was offline. A real fix needs a `deleted_rows` table with its own
+  retention window; not worth it for one user, but worth writing down before
+  someone reports it as a bug.
 
 - **Privacy mode masks chart *numbers*, not chart *shapes*.** Axis ticks, bar
   labels and tooltips route through `useCompactMoneyFormatter` /
@@ -588,14 +729,48 @@ custom composition.
 - **Privacy mode is not persisted, on purpose.** A hidden state surviving a
   restart reads as data loss. It is a shoulder-surfing measure, not security —
   the numbers are still in IndexedDB and one toggle away.
+- **A tie on `updatedAt` leaves both sides holding their own copy.** Both the
+  client (`remoteWins`) and the server (`reject_stale_write`) require *strictly*
+  newer to overwrite, so two devices editing one row in the same millisecond
+  stay divergent until either is edited again. The alternative — letting a tie
+  overwrite — makes the pair rewrite each other on every cycle for as long as
+  they disagree, which is worse: it never settles and it burns requests. Given
+  UUIDv7 ids and one human, a same-millisecond collision on the same row is not
+  a thing that happens. Revisit only if it does.
+
+- **Signing in as a different account on a device that already synced is
+  refused, and there is no UI to reset.** The account stamp in `meta` exists so
+  that one person's rows are never pushed into another person's account, which
+  would merge two sets of finances in a direction no undo reaches. But the only
+  way past it today is exporting a backup and clearing the site data by hand.
+  A "reset this device" button next to the sign-in form is the obvious fix and
+  was left out as scope.
+
+- **Changes from another device arrive on a poll, not a push.** Supabase
+  Realtime is not used: propagation is on sign-in, on a local change, on
+  reconnect, on tab focus, and otherwise every five minutes. For one person
+  moving between a phone and a desktop that is indistinguishable from instant,
+  and a websocket held open costs battery on the platform (Capacitor) where it
+  would matter most. Worth revisiting only alongside Phase 7.
+
+- **`npm run test:sync` needs two auth users that no longer exist.** They are
+  deliberately deleted after each run rather than left behind: a live auth
+  system holding two accounts with a shared known password is not a thing to
+  leave sitting on a project about to hold real financial data. Recreating them
+  is one SQL statement, copied into the script's header comment. The cost is
+  that the script is not runnable straight from a clone, which is the right
+  trade for a script that clears an account before it starts.
+
 - **Astryx pre-1.0 churn.** Keep Astryx behind wrappers in `src/components/` so
   breaking changes hit a few files, not every screen. Run
   `npx astryx upgrade --apply` after any core bump.
 - **Not a risk: performance.** ~100 transactions. Skip virtualization and other
   premature optimization until the ledger is actually slow.
-- **Sequencing.** Phases 0–4 give a better app than the current one with zero
-  backend risk. **Keep the old app installed until Phase 6 verification passes** —
-  two copies of real financial data beats one behind unproven sync.
+- **Sequencing.** Phases 0–4 gave a better app than the current one with zero
+  backend risk; Phase 5 adds the backend, but opt-in, so that property survives
+  for anyone who never signs in. **Keep the old app installed until Phase 6
+  verification passes** — two copies of real financial data beats one behind
+  sync that has been verified headlessly and never once used in anger.
 
 ---
 
@@ -604,10 +779,15 @@ custom composition.
 ```bash
 npm run dev          # Vite dev server on :5173
 npm run build        # tsc -b && vite build
-npm test             # vitest run  (157 passing)
+npm test             # vitest run  (214 passing)
 npm run test:watch
 npm run preview      # serve dist/ on :4173 — use this, not `dev`, to check
                      # that deep links resolve their assets
+npm run test:sync    # end-to-end sync against the LIVE Supabase project.
+                     # Needs two throwaway auth users and E2E_PASSWORD in
+                     # .env; clears the account it signs into, so never
+                     # point it at one holding real data. See the header of
+                     # scripts/sync-e2e.ts.
 
 npx astryx doctor            # validate Astryx wiring
 npx astryx component <Name>  # exact props — use instead of guessing
@@ -615,9 +795,18 @@ npx astryx docs layout       # read before building any page
 ```
 
 Supabase project `lwcelvtqpfvssxkabvun` is reachable via the Supabase MCP
-server, so migrations can be applied directly.
+server, so migrations can be applied directly. Three are applied:
+`create_sync_tables`, `revoke_rls_auto_enable_from_api_roles`,
+`reject_stale_writes`.
 
 ### Environment notes
+
+- **`.env` is required for sync and gitignored.** `VITE_SUPABASE_URL` and
+  `VITE_SUPABASE_PUBLISHABLE_KEY`; see [.env.example](.env.example). With them
+  missing the app runs normally and the Settings screen reports that sync is
+  not configured, which is the state every fork starts in. The publishable key
+  is safe in a client bundle — every table is behind RLS — but it lives in
+  `.env` so a fork points at its own project rather than silently at this one.
 
 - **Git identity is set repo-local** (`.git/config`) to `IronMore3265` /
   `135731975+IronMore3265@users.noreply.github.com`. The noreply address keeps

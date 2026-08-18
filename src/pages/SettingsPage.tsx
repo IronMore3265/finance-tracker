@@ -10,6 +10,10 @@
  * Phase 7 can register a Capacitor or Tauri saver without this screen
  * changing. The name of the active saver is shown next to the button, because
  * "I pressed export and nothing happened" is otherwise undiagnosable.
+ *
+ * The migration importer (`migration/ImportSettings`) is the other half of the
+ * same story and sits last, because it is the one section here that is done
+ * once and then never again.
  */
 import {useState} from 'react';
 import {AlertDialog} from '@astryxdesign/core/AlertDialog';
@@ -35,6 +39,7 @@ import {
   type BackupSummary,
   type ImportMode,
 } from '../db/backup';
+import {ImportSettings} from '../migration/ImportSettings';
 import {activeFileSaverName, saveFile, timestampedFileName} from '../platform/fs';
 import {SyncSettings} from '../sync/SyncSettings';
 import {Page} from '../components/Page';
@@ -75,7 +80,8 @@ export function SettingsPage() {
           ? 'Backup saved.'
           : `Backup saved to ${result.location}.`,
       );
-    } else {
+    } else if (!result.cancelled) {
+      // A dismissed save dialog is not an error — see `SaveFileResult`.
       setExportError(result.reason);
     }
   }
@@ -253,6 +259,8 @@ export function SettingsPage() {
           ) : null}
         </Stack>
       </Section>
+
+      <ImportSettings />
 
       <AlertDialog
         isOpen={isConfirmOpen}

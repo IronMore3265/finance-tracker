@@ -3,7 +3,7 @@
 Handoff document. Read this first — it carries everything a fresh session needs
 so the research below never has to be repeated.
 
-**Last updated:** 2026-08-18 · Phases 0–5 complete.
+**Last updated:** 2026-08-18 · Phases 0–7 complete.
 
 ---
 
@@ -42,7 +42,7 @@ Three problems drove the rewrite:
 | Charts | visx + Motion | Chosen over Recharts for design control |
 | Android | Capacitor 8 | |
 | Desktop | Tauri 2 | Needs Rust toolchain to build; zero Rust written |
-| Migration | In-app `.xls` importer | See §5 |
+| Migration | In-app `.xls` importer, SheetJS from the CDN tarball | See §5, Phase 6 |
 
 ---
 
@@ -208,30 +208,62 @@ financial data and this repo is public.
 The old README claims JSON/CSV export; **it does not exist**. Only `.xls` and
 `.pdf`. The `.xls` is **legacy BIFF8 / OLE2** (Apache POI HSSF).
 
-| Sheet | Columns |
+Sheet order in the file is Accounts, Expenses, Debts & Receivables, Planned
+Transactions. **The column orders below were corrected in Phase 6** — the
+originals here were transcribed wrongly, and are the reason
+[parse.ts](src/migration/parse.ts) addresses every column *by header name*. A
+positional reader would have swapped every description with its category and
+every currency with its icon, and produced an import that looked entirely
+plausible.
+
+| Sheet | Columns, in file order |
 |---|---|
-| Expenses | Date, Description, Category, Amount, Type, Account, ToAccount, Tags |
-| Accounts | Name, Balance, Currency, Icon, ColorHex, IncludeInBalance, DisplayOrder |
+| Accounts | Name, Balance, ColorHex, Icon, Currency, IncludeInBalance, DisplayOrder |
+| Expenses | Date, **Category, Description**, Amount, Type, Account, ToAccount, Tags |
+| Debts & Receivables | Date, Person, Type, Description, Amount, Due Date, Status |
 | Planned Transactions | Title, Amount, Category, Type, Account, Start Date, Interval Type, Interval N, One Time, Next Due Date, Is Active, Description |
-| Debts & Receivables | Person, Amount, Description, Date, Due Date, Type, Status |
 
-Real values: accounts `Cash`, `Brac Bank`, `CAAB`; categories `Food`, `Books`,
-`Gift`, `Medicine`, `Movie`, `Transportation`, `Other`; icons `wallet`,
-`card_visa`; colors `#2196F3`, `#EA3B35`; types `EXPENSE`/`INCOME`/`DEBT`; debt
-status `Pending`/`Settled`; dates `YYYY-MM-DD HH:MM:SS`. ~100 transactions,
-2026-06-29 → 2026-08-17.
+Real values, re-read from the file in Phase 6: accounts `Cash` and `Brac Bank`
+— **there is no `CAAB` account**, that string is a debt *description*;
+categories `Food`, `Books`, `Gift`, `Movie`, `Transportation`, `Other` and
+**`Debt Repayment`**, which the seed list does not have and the importer
+therefore creates; icons `wallet`, `card_visa`; colors `#2196F3`, `#EA3B35`;
+transaction types `EXPENSE`/`INCOME` only; debt types `DEBT`/`DUE`; debt status
+`Pending`/`Settled`; currency is the bare symbol `৳`, not an ISO code; booleans
+are the strings `True`/`False`; a missing due date is the string `N/A`; dates
+are `YYYY-MM-DD HH:MM:SS` with **no timezone**, so they must be read as local
+wall-clock time. **91 transactions**, 2026-06-29 → 2026-08-17, 4 debts, and a
+Planned Transactions sheet that is a header with no rows under it.
 
-**Three consequences for the importer:**
+**Two conventions in the data that the importer depends on:**
+
+- **`Balance` on the Accounts sheet is a *current* balance**, not an opening
+  one — it is the denormalized number the old app mutated on every write. See
+  Phase 6 for what that means.
+- **Settling a debt also writes a ledger row**, an EXPENSE in category `Debt
+  Repayment` described `Repaid: {person} ({description})`. All three settled
+  debts in the real file have one, matching on amount exactly.
+
+**Four consequences for the importer:**
 
 - `exceljs` **cannot** read BIFF8 (`.xlsx` only). **SheetJS is the only
   practical option.** Install from the official CDN tarball
   (`https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`) — **not** npm, where
   `xlsx` is abandoned at 0.18.5 with CVE-2023-30533. **Lazy-load it** so ~800kb
-  stays out of the main bundle.
+  stays out of the main bundle. Check `package.json`: the dependency must stay
+  a `https://cdn.sheetjs.com/` URL, because "tidying" it into a semver range
+  silently swaps in the vulnerable abandoned package.
 - **The export has no stable IDs** — accounts and categories are referenced by
   *name*. The importer must resolve by name and be idempotent.
 - The seed category list in [seed.ts](src/db/seed.ts) deliberately matches the
   export's names so import maps onto existing rows instead of duplicating.
+- **The `.pdf` is a report, not a second copy of the data** — it holds no
+  account, type, or tag columns. Its value is as an *independent* check on the
+  `.xls`, which is what `npm run test:import` uses it for. Its own summary line
+  is `Transactions Spent:`, which is expenses **and** income added together —
+  an old-app quirk, reproduced rather than corrected, because the point is to
+  agree with the file. No figure from the real file is quoted anywhere in this
+  repo; run `npm run test:import` to see them.
 
 ---
 
@@ -319,10 +351,12 @@ A relative base resolves assets against the *current path*: at `/ledger/abc` the
 browser requests `/ledger/assets/index.js`, gets a 404, and renders nothing.
 One-segment routes work by luck, so this would have surfaced as a mystery at the
 first detail route in Phase 3. The old justification ("Capacitor and Tauri load
-from the filesystem") no longer holds — both serve over a custom-protocol origin
-(Capacitor `http://localhost`, Tauri `tauri://localhost`), not `file://`.
-**Phase 7 must confirm this on a real device.** If a packaged build 404s on its
-assets the fix is `createHashRouter` in [App.tsx](src/app/App.tsx), not a
+from the filesystem") no longer holds — both serve over an origin (Capacitor
+`https://localhost`, Tauri `tauri://localhost`), not `file://`.
+**Confirmed in Phase 7**, from Capacitor's own source: its local server serves
+`index.html` for any path whose last segment has no `.`, and that fallback is
+on by default. No hash router is needed. If a packaged build ever does 404 on
+its assets the fix is `createHashRouter` in [App.tsx](src/app/App.tsx), not a
 relative base, which cannot work with nested paths. Web hosts need an SPA
 fallback.
 
@@ -371,7 +405,9 @@ delete with undo.
 - [platform/fs.ts](src/platform/fs.ts) — written ahead of the export button,
   as §6 warned. Native savers **register** themselves at startup rather than
   being imported, so this file builds with neither Capacitor nor Tauri
-  installed. Phase 7 calls `registerFileSaver`.
+  installed. Phase 7 registers from [platform/native.ts](src/platform/native.ts)
+  and left the rule in place — see that phase for why it still holds now that
+  both packages are installed.
 - [components/](src/components/) — `AmountInput` (a *text* input: NumberInput
   commits only valid numbers, so `4500 /` would be rejected keystroke by
   keystroke and the expression feature could not exist), `MoneyText`,
@@ -599,19 +635,234 @@ Supabase's storage key). **If `supabase` ever appears in `index.html`'s preload
 list, something has imported the SDK statically and sync has stopped being
 opt-in.** CSS is unchanged at 168kb / 31kb gzip.
 
-### ⬜ Phase 6 — Migration importer
-Lazy-loaded SheetJS, four sheets, name-based resolution, **diff preview**,
-atomic Dexie commit. Verify totals against the `.pdf`. Confirm re-import is
-idempotent, not duplicated.
+### ✅ Phase 6 — Migration importer
+Five files under [src/migration/](src/migration/), split so that everything
+with a rule behind it is testable without a file, a parser, or a database:
 
-### ⬜ Phase 7 — Packaging
-Capacitor Android + Tauri desktop, both consuming the same `dist/`.
-[src/platform/fs.ts](src/platform/fs.ts) already exists (written in Phase 3, as
-this note asked). Wiring it up means calling `registerFileSaver(nativeSaver)`
-from each native entry point — **do not** add a conditional `import()` of
-`@capacitor/filesystem` to `fs.ts` itself, which is exactly what registration
-exists to avoid: an unresolvable specifier breaks the web build even inside a
-branch that never runs.
+- [ids.ts](src/migration/ids.ts) — the derived id, and the whole answer to
+  idempotency.
+- [parse.ts](src/migration/parse.ts) — sheet rows to typed rows. Pure, and
+  imports no SheetJS, so its rules are tested with object literals.
+- [plan.ts](src/migration/plan.ts) — the diff: what would be created, what is
+  already here, what could not be taken faithfully, and what every balance
+  will be afterwards. Pure.
+- [apply.ts](src/migration/apply.ts) — one Dexie transaction over six tables.
+- [xls.ts](src/migration/xls.ts) — the lazy `await import('xlsx')`, and the
+  only file in the app that knows SheetJS exists.
+- [ImportSettings.tsx](src/migration/ImportSettings.tsx) — one section on
+  Settings, sitting last because it is the one thing there you do once.
+
+**The export has no ids, so the ids are derived from the rows.** UUIDv5 over a
+natural key (date, amount, type, account, category, description, tags), which
+turns "have I already imported this?" from a fuzzy-matching problem into a
+primary-key lookup. The alternative — matching on re-import by resemblance —
+puts a rule that has to be re-tuned on every import in the path of the user's
+whole financial history, and gets it wrong in both directions. Two source rows
+identical in *every* column are still two real spends, so the key carries an
+occurrence index. The cost is that imported rows are v5, not the v7 everything
+else uses, and so do not sort by creation time; nothing depends on that,
+because every row carries a real `date`.
+
+**The importer only ever creates rows. It never edits or deletes one.** Every
+row is matched first — by derived id, then by name — and a match means "leave
+it alone". So a correction made to an imported transaction survives a
+re-import, an account renamed afterwards keeps its new name rather than being
+recreated under the old one, and a row deleted afterwards stays deleted
+(matching deliberately includes soft-deleted rows: a delete that silently
+undoes itself is worse than one that fails). There is no mode in which
+importing loses work, which is what makes "just run it again" safe advice.
+
+**Opening balances are solved for, not copied — and this is the part that
+would have been silently wrong.** The old app's `Balance` column is a *current*
+balance. Writing it into `openingBalance` would double-count the entire ledger:
+an account would import at its real balance and then immediately render at
+roughly twice it. Instead `openingBalance = exportedBalance − (what the
+imported ledger does to it)`, so this app's derived balance lands exactly on
+the number the old app displayed. On the real file that solves to zero for the
+account whose entire history is in the export, and to a real opening figure for
+the one that predates it; both then compute to the exported balance to the
+taka. An account that
+already exists here keeps its own opening balance — silently restating it would
+change every balance the user has already seen — so the preview shows the two
+figures side by side rather than hiding the difference.
+
+**A settled debt gets a settlement row, linked to the ledger entry that paid
+it.** Outstanding is derived from `debtPayments` rather than read off
+`isCleared` (Phase 3's decision), so a settled debt with no payment would
+render as fully outstanding. The old app also posts each settlement to the
+ledger as `Repaid: {person} ({description})`; that row is already being
+imported as an ordinary transaction — the money did leave the account — so the
+payment *links* to it instead of creating a second one, and each ledger row can
+be claimed by only one debt. All three settled debts in the real file link.
+
+**Verification.** 53 new unit tests (267 total, all passing), covering the
+column-order trap, the local-time trap, every loose cell type, the
+opening-balance derivation checked twice — once against the plan and once by
+running the app's own `computeBalances` over the rows the plan would write —
+idempotency, the rename case, the delete case, and an atomicity test that
+sabotages the plan mid-write and asserts the database is untouched.
+
+Then `npm run test:import` ([scripts/import-verify.ts](scripts/import-verify.ts))
+runs the real file through the real importer into a throwaway database, and
+reconciles it against an authority the importer had no part in producing: the
+old app's own `.pdf`. **All 14 checks pass** — 91 logged rows against 91
+parsed, 4 debts against 4, the report's own spend total equal to the sum of
+every parsed amount, outstanding debt and receivables both matching, both
+derived balances equal to the exported ones, no settled debt left outstanding,
+and a second import that writes zero rows. **No figure from the real file is
+quoted here** — `migration-data/` is gitignored because it holds real financial
+data, and a balance copied into a public document leaks exactly as well as the
+file would. Run the script to see them. Reading the `.pdf` means decoding glyph ids from
+a POI-subsetted font, which is this exporter's quirk rather than a standard, so
+the decoder verifies it recovered a sentence it recognises before any figure is
+trusted — an unreadable report fails the run rather than passing it silently.
+
+**Bundle: eager JS is 757kb raw / 240kb gzip across 22 chunks** — unchanged
+from Phase 5 within rounding, because none of this is on the boot path. SheetJS
+is a named `sheetjs` vendor group of **481kb raw / 156kb gzip that is not in
+the initial download**, reached only through `await import()` from
+[xls.ts](src/migration/xls.ts) and only once a file has actually been picked.
+**If `sheetjs` ever appears in `index.html`'s preload list, something has
+imported it statically and every user is paying for a parser they will never
+run.** CSS is unchanged at 168kb / 31kb gzip.
+
+### ✅ Phase 7 — Packaging
+**302 tests passing, `tsc` clean, `astryx doctor` 6/6, build clean, and the
+Android app builds to an installable APK.** The desktop shell is complete but
+**has never been compiled** — see the toolchain note at the end.
+
+Capacitor Android and Tauri desktop, both serving the same `dist/`. There is no
+platform build flag and no second entry point: one web build runs in all three
+places, and the platform is answered at *runtime*.
+
+| File | Job |
+|---|---|
+| [platform/host.ts](src/platform/host.ts) | Which shell is this? Reads injected globals, imports no SDK. |
+| [platform/native.ts](src/platform/native.ts) | The bootstrap: detect, then `await import()` only that shell's module. |
+| [platform/savers/capacitor.ts](src/platform/savers/capacitor.ts) | Android file saver. |
+| [platform/savers/tauri.ts](src/platform/savers/tauri.ts) | Desktop file saver: native Save dialog, then write. |
+| [platform/android-back.ts](src/platform/android-back.ts) | The system back button. |
+| [capacitor.config.ts](capacitor.config.ts) · [src-tauri/](src-tauri/) | The two shells. |
+
+**Detection is by injected global, never by importing the SDK.** Capacitor's
+`native-bridge.js` defines `window.Capacitor` and Tauri v2 defines
+`window.__TAURI_INTERNALS__`, both before app code runs. Asking
+`@capacitor/core` "are we native?" means shipping `@capacitor/core` to every
+browser to be told no. One trap worth keeping: the check is
+`Capacitor.isNativePlatform() === true`, not the presence of the global —
+`@capacitor/core` installs that same global *on the web* the moment anything
+imports it, answering false, so a presence check is true in a plain browser tab.
+
+**`fs.ts`'s "do not add a conditional import here" rule still holds, and it was
+never about the packages being uninstalled.** They are ordinary dependencies
+now. The rule is that `fs.ts` is imported by the export screen, so an import
+inside it is on the boot path whether or not the branch ever runs. `native.ts`
+is where the dynamic imports live, behind a function that returns immediately
+on the web. Measured: **`capacitor` is 18.8kb / 6.8kb gzip and `tauri` is
+4.5kb / 2.1kb gzip, both lazy**, and neither appears in `index.html`'s preload
+list. Eager JS is **759kb raw / 241kb gzip across 22 chunks**, up 2kb from
+Phase 6 — that 2kb is the detection and bootstrap, which is all a browser gets.
+
+**`base: '/'` is confirmed for Android, from Capacitor's source rather than by
+guessing.** `WebViewLocalServer.handleLocalRequest` serves `index.html` for any
+path whose last path segment contains no `.`, and `CapConfig.html5mode`
+defaults to `true`. So `/ledger/<uuid>` gets the document and
+`/assets/index-*.js` gets the file. **No hash router is needed**, and the Phase
+2 open question is closed. (Note the shape of the rule: a route parameter
+containing a dot would be served as a missing file instead. Nothing generates
+one — ids are UUIDs — but a future slug route should keep that in mind.)
+
+**`androidScheme` is pinned to `https` in `capacitor.config.ts`, even though it
+is already the default, because it is the app's origin and IndexedDB is keyed
+to the origin.** Changing it later — to `http`, or to a custom hostname —
+points the WebView at a different origin, and every installed copy comes up
+with an empty database and no error at all. There is no migration for that. It
+is also what makes the WebView a secure context, which `crypto.subtle` and the
+Supabase SDK both need.
+
+**The Android saver tries the public Documents folder first and falls back to
+app-private external storage.** A backup the user cannot find is not a second
+copy of anything, so `Documents/Finance Tracker/` is the destination worth
+having; below Android 13 the plugin must request a storage permission that its
+manifest does not declare, so that attempt can fail. Falling back means the
+export always produces a file, and `location` says which one it produced. The
+order is the whole point — writing the private copy first would silently give
+every device the worse destination. Blobs are converted to base64 before
+crossing the bridge: the plugin's `data` accepts `string | Blob`, but Blob is
+web-only and on Android it arrives as an empty object and writes a **zero-byte
+file rather than throwing**. `arrayBuffer()` + `btoa`, not `FileReader`, so the
+conversion is testable in Node.
+
+**The Android back button had to be fixed, and it is packaging, not polish.**
+Capacitor 8's `BridgeActivity` has no `onBackPressed` at all, so the default
+Activity behaviour applies and back **finishes the Activity** — closing the
+whole app from any of the twelve routes. Installing `@capacitor/app` gets most
+of the way (its plugin calls `webView.goBack()` when no JS listener is
+attached), but at the first history entry it consumes the press and does
+nothing, leaving an app you cannot back out of. The listener completes it:
+navigate while there is history, exit at the first entry. Predictive back looks
+like it would bypass this and does not — the plugin registers through AndroidX's
+`OnBackPressedDispatcher`, which AndroidX wires to the system's
+`OnBackInvokedCallback`, so it fires on both paths at targetSdk 36. Back does
+**not** yet close an open dialog; that needs dialogs to own a history entry and
+is a Phase 8 job.
+
+**`android/` and `src-tauri/` are now committed — reversing a Phase 0
+assumption.** The old `.gitignore` filed them under "native wrappers
+(generated)". They are not: `cap add` scaffolds once, and everything after that
+— the manifest, launcher icons, the signing config — lives there and survives
+no regeneration. Capacitor's own `android/.gitignore` already excludes what
+genuinely is output (the copied `dist/`, the generated Capacitor config, every
+build directory), so what is tracked is the project itself. The keystore lines
+in that file, commented out by default, are **uncommented on purpose**: this
+repository is public, and a committed signing key lets anyone publish an update
+as this app.
+
+**Desktop specifics.** The window is 1200×820 with a 400×560 minimum, and
+`dragDropEnabled: false` — Tauri's webview otherwise swallows HTML5 drag-and-
+drop, which would break dropping a file onto the backup-restore and `.xls`
+import inputs. A CSP is set (`csp: null` is the scaffold default and disables
+the protection entirely); it allows `ipc: http://ipc.localhost` for Tauri's own
+IPC and `https://*.supabase.co` for sync, and Tauri appends its nonces and
+hashes on top at compile time.
+
+**The one deliberate desktop limitation: exports can only be written inside
+`$HOME`.** Tauri's fs scope is a compile-time allowlist and **the save dialog
+does not widen it** — picking a path does not grant permission to write there,
+which is easy to assume and wrong. `capabilities/default.json` allows the home
+directory, covering Documents, Downloads and the desktop; a second drive is
+refused with a bare `forbidden path` that reads like a bug, so `tauri.ts`
+rewrites that one message into something actionable. The real fix, if it is
+ever needed, is a Rust command — commands are not scope-checked, so the
+dialog's own result authorises the write. That was not done here because the
+Rust side cannot be compiled on this machine, and untested IPC is a worse
+trade than a stated limit.
+
+**Verification — and what it does not cover.** 35 new unit tests (302 total):
+every detection case including the browser-with-Capacitor-global one, the
+destination ladder and its base64 conversion, cancellation, the scope-refusal
+message, and that a native module failing to load leaves the browser saver in
+place instead of taking down the render. Then, on the real toolchain:
+`npx cap add android`, `npx cap sync android`, and `gradlew assembleDebug`
+produce a **7.6MB `app-debug.apk`**, whose contents were checked — 147 web
+assets inside, `index.html` present, the entry script pointing at
+`/assets/index-*.js`, and the generated `capacitor.config.json` carrying the
+right appId and scheme. `npx tauri info` parses `tauri.conf.json` and reports
+the CSP, dist path and both plugins.
+
+**Nobody has run either packaged app.** There is no emulator or device
+attached here (`adb devices` is empty and no AVD exists), so the APK has been
+built and inspected but never launched. And the desktop build is **blocked on a
+toolchain this machine does not have**: no `cargo`/`rustc`, and no MSVC C++
+build tools or Windows SDK, so `npm run tauri:build` cannot run at all. Every
+Rust file, `Cargo.toml`, `tauri.conf.json` and the capability set are written
+and consistent, and none of it has seen a compiler. First desktop run needs
+[rustup](https://rustup.rs) plus the Visual Studio C++ build tools; if the
+window comes up blank, the CSP is the first thing to relax.
+
+The launcher icons on both platforms are still the scaffold defaults — the
+generic Android icon and Tauri's logo. That is Phase 8's job, along with the
+splash screen and safe-area insets.
 
 ### ⬜ Phase 8 — Polish
 Route/shared-element transitions, list stagger, skeletons, desktop keyboard
@@ -648,7 +899,8 @@ custom composition.
   this account get to this number?" and owns the running balance. Different
   questions, so they stayed separate.
 
-- **Phases 3, 4 and 5 have not been click-tested in a real browser.** Phase 5's
+- **Phases 3, 4, 5 and 6 have not been click-tested in a real browser, and
+  Phase 7's two packaged apps have never been launched at all.** Phase 5's
   *engine* is the best-verified thing in the repo — 27 checks against the live
   Supabase project, plus 52 unit tests — but that verification is entirely
   headless. What nobody has done is type a password into the form. Likeliest
@@ -677,6 +929,16 @@ custom composition.
   measurement, so a run of wide glyphs is the case to look at), the tooltip
   placement near the right edge of a card, and the charts at a narrow mobile
   width where the axis-label stride does the most work.
+
+  Phase 6 adds its own version of this. Its *logic* is the best-verified thing
+  in the repo after the sync engine — 53 unit tests plus 14 checks against the
+  real file and the old app's own report — but every one of those runs the
+  importer as a function call. Nobody has picked a file with the file picker.
+  Likeliest surprises: whether `FileInput`'s `isLoading` reads sensibly while
+  an 800kb chunk downloads on a slow connection; the balances `Table` at a
+  narrow width, since it is the only table in the app with two numeric columns;
+  and `Collapsible` holding the issues list, which is the first use of that
+  component here.
 
 - **Deleting an account orphans its transactions, quietly.** `computeBalances`
   ignores a transaction pointing at an unknown account, so the rows survive in
@@ -751,7 +1013,8 @@ custom composition.
   reconnect, on tab focus, and otherwise every five minutes. For one person
   moving between a phone and a desktop that is indistinguishable from instant,
   and a websocket held open costs battery on the platform (Capacitor) where it
-  would matter most. Worth revisiting only alongside Phase 7.
+  would matter most. Still worth revisiting once the Android build has actually
+  been lived with on a phone.
 
 - **`npm run test:sync` needs two auth users that no longer exist.** They are
   deliberately deleted after each run rather than left behind: a live auth
@@ -761,6 +1024,46 @@ custom composition.
   that the script is not runnable straight from a clone, which is the right
   trade for a script that clears an account before it starts.
 
+- **There is no "undo this import".** Nothing records which rows a given import
+  created, so backing one out means finding them by hand. It is *possible* —
+  every imported row's id is a UUIDv5 under a fixed namespace, so they are
+  identifiable — but there is no UI and no batch record. Mitigated by the
+  import being purely additive and previewed in full beforehand, and by
+  Settings sitting one section above a working backup/restore pair. Worth a
+  batch stamp if a second import source ever appears; not worth it for one
+  migration done once.
+
+- **The importer only adds, which cuts both ways.** A row deleted in the old
+  app after an export stays here on the next import, and a row *edited* there
+  imports as a second row rather than updating the first — the id is derived
+  from the content, so changed content is by definition a different row. For
+  transactions this is nearly moot, since the old app cannot edit them at all
+  (that is the whole reason for the rewrite). For accounts it is real: renaming
+  `Cash` in the old app and re-importing creates a second account, because
+  account matching is by name and the name is what changed. The old app is
+  meant to be retired the day this import passes, so the window in which that
+  matters is the one where both are being used — which is exactly the window
+  the preview exists for.
+
+- **An imported debt is attached to no account, and a settlement may touch no
+  ledger row.** The export never says which wallet a debt is against, and
+  guessing would attach money to the wrong one, so `accountId` is null. For a
+  settled debt the importer records a settlement so the outstanding balance
+  reads zero; if the export holds no matching `Repaid:` row it links to
+  nothing, so the debt clears without a corresponding ledger entry. Both are
+  faithful to a source that does not carry the information, and both are
+  visible: the debt shows no account, and the settlement shows no transaction.
+
+- **Reconciliation against the `.pdf` rests on a glyph offset.** The report's
+  fonts are subsetted by Apache POI, so its text is glyph ids offset from ASCII
+  by a constant that is this exporter's habit rather than a standard. The
+  decoder in [import-verify.ts](scripts/import-verify.ts) checks that it
+  recovered a sentence it recognises before trusting any figure, and fails the
+  run rather than passing silently if it cannot — but a *different* PDF writer
+  would need a different decoder, not a tweak. If that ever happens, reading
+  the four summary figures off the report by eye and hardcoding them is the
+  proportionate fix; the checks matter, the automation of them does not.
+
 - **Astryx pre-1.0 churn.** Keep Astryx behind wrappers in `src/components/` so
   breaking changes hit a few files, not every screen. Run
   `npx astryx upgrade --apply` after any core bump.
@@ -768,9 +1071,13 @@ custom composition.
   premature optimization until the ledger is actually slow.
 - **Sequencing.** Phases 0–4 gave a better app than the current one with zero
   backend risk; Phase 5 adds the backend, but opt-in, so that property survives
-  for anyone who never signs in. **Keep the old app installed until Phase 6
-  verification passes** — two copies of real financial data beats one behind
-  sync that has been verified headlessly and never once used in anger.
+  for anyone who never signs in. Phase 6's verification now passes — the real
+  file imports, reconciles against the old app's own report, and re-imports to
+  nothing. **Keep the old app installed anyway until the importer has been run
+  once from the actual UI**, because what passes today is a script: nobody has
+  yet watched the file go in through the file picker. Two copies of real
+  financial data beats one behind a path that has only ever been driven
+  headlessly.
 
 ---
 
@@ -779,7 +1086,7 @@ custom composition.
 ```bash
 npm run dev          # Vite dev server on :5173
 npm run build        # tsc -b && vite build
-npm test             # vitest run  (214 passing)
+npm test             # vitest run  (302 passing)
 npm run test:watch
 npm run preview      # serve dist/ on :4173 — use this, not `dev`, to check
                      # that deep links resolve their assets
@@ -788,6 +1095,20 @@ npm run test:sync    # end-to-end sync against the LIVE Supabase project.
                      # .env; clears the account it signs into, so never
                      # point it at one holding real data. See the header of
                      # scripts/sync-e2e.ts.
+npm run test:import  # run the real .xls through the real importer and
+                     # reconcile it against the old app's own .pdf report.
+                     # Needs migration-data/, which is gitignored; without it
+                     # the script says so and exits 0. Writes to a throwaway
+                     # fake-indexeddb, never to the app's own database.
+
+npm run android:sync # build the web app and copy it into android/
+npm run android:run  # the same, then install and launch on a connected device
+npm run android:open # open the project in Android Studio
+npm run tauri:dev    # desktop shell against the Vite dev server  (needs Rust)
+npm run tauri:build  # bundled desktop app                        (needs Rust)
+
+cd android && ./gradlew assembleDebug  # app-debug.apk, without a device
+npx tauri info                         # parse tauri.conf.json, report toolchain
 
 npx astryx doctor            # validate Astryx wiring
 npx astryx component <Name>  # exact props — use instead of guessing
@@ -815,4 +1136,20 @@ server, so migrations can be applied directly. Three are applied:
 - **PowerShell 5.1 mangles multi-line arguments** passed to native commands, so
   `git commit -m` with a multi-line message fails oddly. Write the message to a
   file and use `git commit -F <file>`.
+- **Git Bash here-documents collapse a doubled backslash to a single one**,
+  even when the delimiter is quoted. Writing a file through a heredoc turns a
+  character class meant to read `[\\/]` into `[\/]` — which still parses, and
+  matches only a forward slash. That is how two vendor-chunk patterns in
+  `vite.config.ts` briefly stopped matching Windows paths, and why a Windows
+  path in a test string quietly lost its separators. Write files with an editor
+  tool, or assemble the backslashes with `chr(92)` rather than typing them.
+
+- **The Android toolchain is present on this machine; the Rust one is not.**
+  `ANDROID_HOME=C:\Android\sdk` with platforms 35 and 36, build-tools 35/36
+  and accepted licences, plus JDK 21 at
+  `C:\Program Files\Microsoft\jdk-21.0.11.10-hotspot` — enough to build an
+  APK, though there is no emulator image and no AVD, so nothing can be *run*.
+  There is no `cargo`, no `rustc`, and no MSVC C++ toolchain or Windows SDK, so
+  the Tauri build is blocked until [rustup](https://rustup.rs) and the Visual
+  Studio C++ build tools are installed.
 - Commits so far go straight to `main`; there is no PR workflow set up.

@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Everything the window needs, and nothing else: the save dialog, and permission to write the file it returned.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:allow-save",
+    {
+      "identifier": "fs:allow-write-text-file",
+      "allow": [{ "path": "$HOME/*" }, { "path": "$HOME/**" }]
+    },
+    {
+      "identifier": "fs:allow-write-file",
+      "allow": [{ "path": "$HOME/*" }, { "path": "$HOME/**" }]
+    }
+  ]
+}

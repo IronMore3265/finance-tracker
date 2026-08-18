@@ -7,8 +7,16 @@ dist-ssr/
 *.local
 *.tsbuildinfo
 
-# Native wrappers (generated)
-android/
+# Native wrappers.
+#
+# `android/` is committed, unlike what Phase 0 assumed. It is not purely
+# generated: `cap add` scaffolds it once and everything after that — the
+# manifest, the launcher icons, the signing config — lives there and survives
+# no regeneration. Its own `android/.gitignore` already excludes the parts that
+# genuinely are output (the copied `dist/`, the generated Capacitor config, and
+# every build directory), so what is tracked is only the project itself.
+#
+# `src-tauri/` is committed for the same reason; only its build output is not.
 ios/
 src-tauri/target/
 src-tauri/gen/

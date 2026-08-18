@@ -23,11 +23,17 @@ export default defineConfig({
   //
   // This replaces an earlier `base: './'` justified by "Capacitor and Tauri
   // load the build from the filesystem". That premise no longer holds: both
-  // serve over a custom-protocol origin (Capacitor `http://localhost`, Tauri
+  // serve over an origin (Capacitor `https://localhost`, Tauri
   // `tauri://localhost`), not `file://`, so a root-absolute base resolves
-  // correctly there too. Phase 7 must confirm that on a real device — if a
-  // packaged build 404s on its assets, the fix is `createHashRouter` in
-  // app/App.tsx, not a relative base, which cannot work with nested paths.
+  // correctly there too.
+  //
+  // Phase 7 confirmed the Android half in Capacitor's own source rather than
+  // by guessing: `WebViewLocalServer.handleLocalRequest` serves `index.html`
+  // for any path whose last segment contains no `.`, and `CapConfig.html5mode`
+  // defaults to true — so `/ledger/<id>` gets the document and
+  // `/assets/index-*.js` gets the file. No hash router is needed. If a
+  // packaged build ever does 404 on its assets, the fix is `createHashRouter`
+  // in app/App.tsx, not a relative base, which cannot work with nested paths.
   //
   // Web hosts need an SPA fallback (rewrite unknown paths to index.html).
   base: '/',
@@ -65,6 +71,22 @@ export default defineConfig({
             // preload list, something has imported the SDK statically and
             // sync has stopped being opt-in.
             {name: 'supabase', test: /node_modules[\\/]@supabase[\\/]/},
+            // Reached only through `await import()` in migration/xls.ts, on
+            // the one screen that reads the old app's .xls. Roughly 800kb of
+            // parser for a job most people do once and never again, so the
+            // same rule applies: if `sheetjs` shows up in the initial preload
+            // list, something has imported it statically and every user is
+            // now paying for it.
+            {name: 'sheetjs', test: /node_modules[\\/]xlsx[\\/]/},
+            // The two native shells. Reached only through `await import()` in
+            // platform/native.ts, and only after the shell's own globals have
+            // identified it, so a browser downloads neither. Named for the same
+            // reason as the two above: if `capacitor` or `tauri` ever appears
+            // in the initial preload list, something has imported a plugin
+            // statically and every web visitor is paying for a file handler
+            // they cannot use.
+            {name: 'capacitor', test: /node_modules[\\/]@capacitor[\\/]/},
+            {name: 'tauri', test: /node_modules[\\/]@tauri-apps[\\/]/},
           ],
         },
       },

@@ -31,7 +31,17 @@ export interface SaveFileRequest {
 
 export type SaveFileResult =
   | {ok: true; /** Human-readable destination, or '' when the OS did not say. */ location: string}
-  | {ok: false; reason: string};
+  | {
+      ok: false;
+      reason: string;
+      /**
+       * The user dismissed a save dialog. Only the desktop saver can produce
+       * this — the browser and Android paths never ask. Callers must not show
+       * an error for it: someone who changed their mind has not hit a problem,
+       * and a red banner would say otherwise.
+       */
+      cancelled?: true;
+    };
 
 export interface FileSaver {
   /** Shown in diagnostics so a failed export says which path was tried. */
